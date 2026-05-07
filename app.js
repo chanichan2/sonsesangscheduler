@@ -17,6 +17,10 @@
 (function () {
   "use strict";
 
+  // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
+  const APP_VERSION = "2026-05-08-r3";
+  console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
+
   /* =======================================================================
    * 1. CONFIG
    * ======================================================================= */
@@ -156,24 +160,30 @@
     // 하이픈 → 물결
     s = s.replace(/-/g, "~");
 
+    // 범위 단위는 최대한 관대하게 — 한 구간이 잘못돼도 다른 구간은 살림.
     const parts = s.split(",");
     const ranges = [];
     for (const p of parts) {
-      if (!p) throw new Error("빈 구간: " + raw);
+      if (!p) continue; // 빈 토큰(",,") 무시
       const tokens = p.split("~");
       if (tokens.length !== 2) {
-        throw new Error("올바르지 않은 구간 형식: " + p);
+        console.warn(`[parser] 잘못된 구간 형식 무시: "${p}" (raw: ${raw})`);
+        continue;
       }
       const [left, right] = tokens;
       const sM = left === "" ? startMin : parseTimeToken(left);
       const eM = right === "" ? endMin : parseTimeToken(right);
-      if (sM == null) throw new Error("올바르지 않은 시간: " + left);
-      if (eM == null) throw new Error("올바르지 않은 시간: " + right);
+      if (sM == null || eM == null) {
+        console.warn(`[parser] 시간 토큰 무시: "${p}" (raw: ${raw})`);
+        continue;
+      }
       if (sM >= eM) {
-        // 한쪽 끝이 자동 채움(예: "~9", "24~")인 경우는 분석 범위 밖을 적은 것이므로 조용히 무시.
-        // 양쪽이 모두 명시된 경우(예: "15~13")만 명백한 입력 오류로 간주.
-        if (left === "" || right === "") continue;
-        throw new Error("시작이 끝보다 큼: " + p);
+        // "~9"(startHour=9), "24~"(endHour=22) 같은 분석 범위 밖 입력은 무시.
+        // 양쪽이 모두 명시된 역순(예: "15~13")도 셀 전체를 깨뜨리지 않게 무시하되 콘솔 경고.
+        if (left !== "" && right !== "") {
+          console.warn(`[parser] 시작이 끝보다 큼, 구간 무시: "${p}" (raw: ${raw})`);
+        }
+        continue;
       }
 
       const cs = Math.max(sM, startMin);
@@ -744,15 +754,16 @@
       state.slots = slots;
       state.songsData = aggregateSongs(payload, grid, slots);
 
-      // 자체 검증
+      // 자체 검증 — 실제 계산 불일치만 배너로 알림. 파싱 누락은 콘솔에만 기록.
       const errs = selfValidate(state.songsData, payload, slots);
       if (errs.length) {
         showAlert(
           `자체 검증 불일치 ${errs.length}건이 발견되었습니다. 콘솔에서 자세한 내용을 확인하세요.`
         );
-      } else if (parseFailures.length) {
-        showAlert(
-          `파싱 실패 셀 ${parseFailures.length}건이 있습니다. 해당 항목은 "불가"로 처리됩니다 (콘솔 참고).`
+      }
+      if (parseFailures.length) {
+        console.info(
+          `[info] 파싱하지 못한 셀 ${parseFailures.length}건은 "불가"로 처리되었습니다. 자세한 목록은 위의 [parser] 로그를 참고하세요.`
         );
       }
 
