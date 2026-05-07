@@ -101,9 +101,36 @@
    * @returns { ranges, mijeong }
    * @throws 잘못된 입력일 때
    */
+  // 한글 스프레드시트에서 흔히 섞이는 유사 문자/전각 문자를 정규화한다.
+  // (한글 입력기가 자동으로 ~ → 〜, ( → （, : → ：, 13 → １３ 등으로 바꾸는 경우가 많음)
+  function normalizeRaw(raw) {
+    let s = String(raw);
+    // 제로폭/BOM 제거 (U+200B..U+200D, U+FEFF)
+    s = s.replace(/[​-‍﻿]/g, "");
+    // 각종 대시/하이픈/장음 부호 → '-'
+    //   U+2010..U+2015 (하이픈/대시류), U+2212 (마이너스), U+FE58/FE63/FF0D (전각/소형)
+    s = s.replace(/[‐-―−﹘﹣－]/g, "-");
+    // 각종 물결/웨이브 → '~'
+    //   U+223C (∼), U+301C (〜), U+3030 (〰), U+FF5E (～)
+    s = s.replace(/[∼〜〰～]/g, "~");
+    // 전각 괄호 → 반각
+    s = s.replace(/（/g, "(").replace(/）/g, ")");
+    // 전각 콜론 → ':'
+    s = s.replace(/：/g, ":");
+    // 전각/한자 쉼표 → ','
+    s = s.replace(/[，、]/g, ",");
+    // 전각 숫자 → 반각
+    s = s.replace(/[０-９]/g, (ch) =>
+      String.fromCharCode(ch.charCodeAt(0) - 0xFF10 + 0x30)
+    );
+    // 전각 영문 O/X
+    s = s.replace(/[Ｏｏ]/g, "O").replace(/[Ｘｘ]/g, "X");
+    return s;
+  }
+
   function parseAvailability(raw, startMin, endMin) {
     if (raw == null) return { ranges: [], mijeong: false };
-    let s = String(raw).replace(/\s+/g, "").replace(/o/g, "O").replace(/x/g, "X");
+    let s = normalizeRaw(raw).replace(/\s+/g, "").replace(/o/g, "O").replace(/x/g, "X");
     if (s === "") return { ranges: [], mijeong: false };
 
     // 끝의 (미정) 분리
