@@ -1,0 +1,441 @@
+/* ==========================================================================
+   댄스 연습 일정 분석 — 스타일
+   ========================================================================== */
+
+:root {
+  --accent: #2C3E50;
+  --accent-soft: #34495E;
+  --bg: #F7F9FB;
+  --card-bg: #FFFFFF;
+  --border: #E1E8ED;
+  --muted: #7F8C8D;
+  --text: #2C3E50;
+  --primary: #3498DB;
+  --primary-hover: #2E86C1;
+  --shadow-sm: 0 1px 2px rgba(20,30,50,0.05);
+  --shadow-md: 0 4px 12px rgba(20,30,50,0.08);
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "맑은 고딕", "Malgun Gothic", "Segoe UI",
+    "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 700; }
+button { font-family: inherit; cursor: pointer; }
+
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
+
+/* ---------- Header ---------- */
+
+.app-header {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-md);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.header-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.app-header h1 {
+  font-size: 22px;
+  letter-spacing: -0.5px;
+}
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.header-meta .muted {
+  color: rgba(255,255,255,0.7);
+  font-size: 13px;
+}
+
+.primary-btn {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.primary-btn:hover { background: var(--primary-hover); }
+
+/* ---------- Alert / Error ---------- */
+
+.alert-banner {
+  background: #FFF4E5;
+  border-bottom: 2px solid #E67E22;
+  color: #7E3F00;
+  padding: 12px 24px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.error {
+  background: #FDECEA;
+  border: 1px solid #E74C3C;
+  color: #922B21;
+  padding: 16px;
+  border-radius: var(--radius);
+  margin: 16px 24px;
+}
+
+.loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+/* ---------- Controls ---------- */
+
+.controls {
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+}
+.controls-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  align-items: center;
+}
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+.control-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-soft);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.threshold-readout {
+  background: var(--accent);
+  color: #fff;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 12px;
+}
+.control-group input[type="range"] {
+  width: 100%;
+  accent-color: var(--primary);
+}
+
+.toggle-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #fff;
+}
+.toggle-btn {
+  background: #fff;
+  border: none;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text);
+  border-right: 1px solid var(--border);
+  transition: background 0.15s, color 0.15s;
+}
+.toggle-btn:last-child { border-right: none; }
+.toggle-btn:hover { background: #F4F8FB; }
+.toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ---------- Sections ---------- */
+
+main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.output-section {
+  margin-bottom: 40px;
+}
+.output-section > h2 {
+  font-size: 18px;
+  margin-bottom: 4px;
+  color: var(--accent);
+}
+.section-desc {
+  color: var(--muted);
+  margin: 4px 0 16px 0;
+  font-size: 13px;
+}
+
+/* ---------- Song card ---------- */
+
+.song-card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.song-header {
+  padding: 14px 18px;
+  background: linear-gradient(180deg, #FAFBFC 0%, #F4F6F8 100%);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.song-header h3 {
+  font-size: 16px;
+  color: var(--accent);
+}
+.capacity-badge {
+  background: var(--accent-soft);
+  color: #fff;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.view-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #fff;
+}
+
+/* ---------- Heatmap table ---------- */
+
+.heatmap-wrap {
+  overflow-x: auto;
+  padding: 0 4px;
+}
+table.heatmap {
+  border-collapse: separate;
+  border-spacing: 2px;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 13px;
+}
+table.heatmap th {
+  background: #F4F6F8;
+  padding: 6px 8px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--accent-soft);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+table.heatmap th.corner { background: transparent; }
+table.heatmap th.slot-label {
+  background: #ECF0F1;
+  text-align: right;
+  min-width: 90px;
+}
+table.heatmap th .wd {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+table.heatmap td.cell {
+  text-align: center;
+  font-weight: 700;
+  font-size: 16px;
+  border-radius: 4px;
+  padding: 8px 6px;
+  min-width: 64px;
+  vertical-align: middle;
+}
+table.heatmap.heatmap-detailed td.cell {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px;
+  min-width: 130px;
+}
+.cell-count {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.cell-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+/* ---------- Member chip ---------- */
+
+.member-chip {
+  display: inline-block;
+  background: rgba(255,255,255,0.55);
+  color: inherit;
+  border: 1px solid rgba(0,0,0,0.08);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.member-chip.mijeong {
+  border-color: #B7950B;
+  background: rgba(241,196,15,0.18);
+}
+.member-chip.partial {
+  border-style: dashed;
+}
+.member-chip.missing {
+  background: #FDECEA;
+  color: #922B21;
+  border-color: #E74C3C;
+}
+
+/* ---------- Summary block ---------- */
+
+.song-summary {
+  padding: 12px 18px 18px 18px;
+  background: #FAFBFC;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.summary-block {
+  margin-bottom: 6px;
+}
+.summary-block:last-child { margin-bottom: 0; }
+.summary-block strong {
+  color: var(--accent);
+  margin-right: 6px;
+}
+.summary-block.muted { color: var(--muted); font-style: italic; }
+
+/* ---------- Candidate cards ---------- */
+
+.candidate-list {
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.candidate-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cand-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding-left: 10px;
+}
+.cand-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cand-date {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--accent);
+}
+.cand-time {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.cand-dur {
+  font-size: 12px;
+  color: var(--muted);
+}
+.cand-badge {
+  padding: 6px 10px;
+  border-radius: 16px;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.cand-details {
+  font-size: 12px;
+}
+.cand-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent-soft);
+  padding: 4px 0;
+  list-style: revert;
+}
+.cand-members {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ---------- Footer & misc ---------- */
+
+.app-footer {
+  text-align: center;
+  color: var(--muted);
+  padding: 24px;
+  font-size: 12px;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 720px) {
+  .header-inner { padding: 12px 16px; }
+  .app-header h1 { font-size: 18px; }
+  .controls-inner { padding: 12px 16px; gap: 16px; }
+  main { padding: 16px; }
+  .control-group { min-width: 100%; }
+  .candidate-list { grid-template-columns: 1fr; padding: 12px; }
+  .song-header { padding: 12px; }
+  .song-header h3 { font-size: 15px; }
+  .view-toggle { margin-left: 0; }
+  table.heatmap td.cell { min-width: 48px; font-size: 14px; padding: 6px 4px; }
+  table.heatmap.heatmap-detailed td.cell { min-width: 110px; }
+}

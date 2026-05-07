@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>댄스 연습 일정 분석 — 손세상</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <h1>댄스 연습 일정 분석</h1>
+    <div class="header-meta">
+      <span id="last-updated" class="muted">데이터 미로드</span>
+      <button id="refresh-btn" class="primary-btn" type="button">새로고침</button>
+    </div>
+  </div>
+</header>
+
+<div id="alert-banner" class="alert-banner hidden" role="alert"></div>
+
+<section class="controls">
+  <div class="controls-inner">
+    <div class="control-group">
+      <label for="threshold-slider">
+        참여율 임계값
+        <span class="threshold-readout"><span id="threshold-value">60</span>%</span>
+      </label>
+      <input type="range" id="threshold-slider" min="0" max="100" step="5" value="60">
+    </div>
+    <div class="control-group">
+      <label>연습 길이</label>
+      <div class="toggle-group duration-toggle">
+        <button class="toggle-btn" data-duration="2" type="button">2시간</button>
+        <button class="toggle-btn" data-duration="3" type="button">3시간</button>
+        <button class="toggle-btn active" data-duration="both" type="button">둘 다</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<main id="main-content">
+  <div id="loading" class="loading">데이터 로딩 중...</div>
+  <div id="error" class="error hidden"></div>
+
+  <section id="heatmap-section" class="output-section">
+    <h2>① 곡별 시간대별 참여 가능 인원</h2>
+    <p class="section-desc">
+      각 셀은 해당 시간대에 30분 이상 참여 가능한 멤버 수를 나타냅니다.
+      배경색은 참여율을 의미하며, 임계값 미만이거나 50% 미만인 슬롯은 흐림 처리됩니다.
+    </p>
+    <div id="heatmaps"></div>
+  </section>
+
+  <section id="candidates-section" class="output-section">
+    <h2>② 연습 시간 후보</h2>
+    <p class="section-desc">
+      해당 시간 내내 참여 가능한 멤버의 교집합 기준입니다.
+      인원수 → 연속 시간 → 미정 멤버 적은 순 → 부분 참여 적은 순 → 이른 날짜 순으로 정렬됩니다.
+    </p>
+    <div id="candidates"></div>
+  </section>
+</main>
+
+<footer class="app-footer">
+  <p>손세상 · 정적 SPA · 클라이언트 사이드 전용</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
