@@ -169,7 +169,12 @@
       const eM = right === "" ? endMin : parseTimeToken(right);
       if (sM == null) throw new Error("올바르지 않은 시간: " + left);
       if (eM == null) throw new Error("올바르지 않은 시간: " + right);
-      if (sM >= eM) throw new Error("시작이 끝보다 큼: " + p);
+      if (sM >= eM) {
+        // 한쪽 끝이 자동 채움(예: "~9", "24~")인 경우는 분석 범위 밖을 적은 것이므로 조용히 무시.
+        // 양쪽이 모두 명시된 경우(예: "15~13")만 명백한 입력 오류로 간주.
+        if (left === "" || right === "") continue;
+        throw new Error("시작이 끝보다 큼: " + p);
+      }
 
       const cs = Math.max(sM, startMin);
       const ce = Math.min(eM, endMin);
