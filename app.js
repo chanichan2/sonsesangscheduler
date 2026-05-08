@@ -8,10 +8,9 @@
  *   3. PARSER
  *   4. HOURLY GRID
  *   5. AGGREGATION
- *   6. CANDIDATES
- *   7. VALIDATION
- *   8. RENDER
- *   9. CONTROLLER
+ *   6. VALIDATION
+ *   7. RENDER
+ *   8. CONTROLLER
  * ========================================================================= */
 
 (function () {
@@ -29,12 +28,6 @@
   // (배포: Apps Script → 배포 → 새 배포 → 웹앱 / 액세스: 모든 사용자)
   const APPS_SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbzb3vbAeP0L_bB0_QJ4jvx_kJDmED5aP15vKJAFnifRuiIMN2HLmcdvAkGwe1ibZNB6/exec";
-
-  // 후보 슬롯 점수화/렌더링에 영향을 주는 기본값
-  const DEFAULTS = {
-    duration: "both", // "2" | "3" | "both"
-    maxCandidatesPerSong: 12,
-  };
 
   /* =======================================================================
    * 2. API
@@ -301,92 +294,7 @@
   }
 
   /* =======================================================================
-   * 6. CANDIDATES
-   *   연습 시간 후보 도출 + 점수화
-   * ======================================================================= */
-
-  function findCandidatesForSong(songData, dates, slots, threshold, durations) {
-    const out = [];
-    const D = dates.length;
-    const S = slots.length;
-    for (let di = 0; di < D; di++) {
-      for (const dur of durations) {
-        for (let si = 0; si + dur <= S; si++) {
-          // dur개 연속 슬롯 모두 가능한 멤버 교집합
-          let intersection = null; // Map(name -> { mijeongAny, partialAny })
-          for (let k = 0; k < dur; k++) {
-            const cell = songData.cells[di][si + k];
-            if (k === 0) {
-              intersection = new Map();
-              for (const mi of cell.members) {
-                intersection.set(mi.name, {
-                  mijeongAny: !!mi.mijeong,
-                  partialAny: mi.memos.some((x) => x !== "미정"),
-                });
-              }
-            } else {
-              const slotMap = new Map(cell.members.map((m) => [m.name, m]));
-              for (const name of [...intersection.keys()]) {
-                if (!slotMap.has(name)) {
-                  intersection.delete(name);
-                } else {
-                  const mi = slotMap.get(name);
-                  const info = intersection.get(name);
-                  if (mi.mijeong) info.mijeongAny = true;
-                  if (mi.memos.some((x) => x !== "미정")) info.partialAny = true;
-                }
-              }
-            }
-            if (intersection.size === 0) break;
-          }
-          const cap = songData.song.capacity;
-          const count = intersection.size;
-          if (count === 0) continue;
-          const percent = cap > 0 ? (count / cap) * 100 : 0;
-          if (percent < threshold) continue;
-
-          const memberList = [...intersection.entries()].map(([name, info]) => ({
-            name,
-            ...info,
-          }));
-          memberList.sort((a, b) => a.name.localeCompare(b.name, "ko"));
-          const mijeongCount = memberList.filter((m) => m.mijeongAny).length;
-          const partialCount = memberList.filter((m) => m.partialAny).length;
-          const presentNames = new Set(memberList.map((m) => m.name));
-          const missingMembers = songData.song.members.filter((m) => !presentNames.has(m));
-
-          out.push({
-            songName: songData.song.name,
-            capacity: cap,
-            dateIdx: di,
-            date: dates[di],
-            slotIdx: si,
-            duration: dur,
-            startMin: slots[si][0],
-            endMin: slots[si + dur - 1][1],
-            count,
-            percent,
-            members: memberList,
-            mijeongCount,
-            partialCount,
-            missingMembers,
-          });
-        }
-      }
-    }
-    out.sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      if (b.duration !== a.duration) return b.duration - a.duration;
-      if (a.mijeongCount !== b.mijeongCount) return a.mijeongCount - b.mijeongCount;
-      if (a.partialCount !== b.partialCount) return a.partialCount - b.partialCount;
-      if (a.dateIdx !== b.dateIdx) return a.dateIdx - b.dateIdx;
-      return a.startMin - b.startMin;
-    });
-    return out;
-  }
-
-  /* =======================================================================
-   * 7. VALIDATION
+   * 6. VALIDATION
    * ======================================================================= */
 
   function selfValidate(songsData, payload, slots) {
@@ -438,7 +346,7 @@
   }
 
   /* =======================================================================
-   * 8. RENDER
+   * 7. RENDER
    * ======================================================================= */
 
   function escapeHtml(s) {
@@ -471,6 +379,21 @@
     if (isNaN(d.getTime())) return "";
     d.setDate(d.getDate() + idx);
     return days[d.getDay()];
+  }
+
+  // dates[i]는 "5/8" 같은 짧은 형식으로 오기도 하고, Apps Script에서 Date 객체가
+  // 직렬화되며 "Fri May 08 2026 09:00:00 GMT+0900 (한국 표준시)" 같은 긴 형식으로
+  // 오기도 한다. 화면 헤더에서는 항상 "M/D"로 보여주기 위해 정규화.
+  function formatDateShort(raw) {
+    if (raw == null) return "";
+    const s = String(raw).trim();
+    if (s === "") return "";
+    if (/^\d{1,2}\/\d{1,2}$/.test(s)) return s;
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    return s;
   }
 
   function memberBadge(mi) {
@@ -538,7 +461,7 @@
     tbl.className = "heatmap" + (view === "B" ? " heatmap-detailed" : "");
     let html = "<thead><tr><th class='corner'>시간 \\ 날짜</th>";
     for (let di = 0; di < dates.length; di++) {
-      html += `<th>${escapeHtml(dates[di])}<br><span class="wd">(${getWeekday(
+      html += `<th>${escapeHtml(formatDateShort(dates[di]))}<span class="wd">(${getWeekday(
         settings.startDate,
         di
       )})</span></th>`;
@@ -623,84 +546,6 @@
     return div;
   }
 
-  function renderCandidates(songsData, dates, slots, settings, threshold, durationMode) {
-    const root = document.getElementById("candidates");
-    root.innerHTML = "";
-    const durations = durationMode === "both" ? [2, 3] : [parseInt(durationMode, 10)];
-
-    for (const sd of songsData) {
-      const card = document.createElement("section");
-      card.className = "song-card";
-      card.innerHTML = `<div class="song-header"><h3>${escapeHtml(
-        sd.song.name
-      )}</h3><span class="capacity-badge">정원 ${sd.song.capacity}명</span></div>`;
-      const list = document.createElement("div");
-      list.className = "candidate-list";
-
-      const candidates = findCandidatesForSong(sd, dates, slots, threshold, durations).slice(
-        0,
-        DEFAULTS.maxCandidatesPerSong
-      );
-      if (!candidates.length) {
-        list.innerHTML = '<p class="empty">임계값을 만족하는 후보가 없습니다.</p>';
-      } else {
-        for (const c of candidates) {
-          list.appendChild(renderCandidateCard(c, settings));
-        }
-      }
-      card.appendChild(list);
-      root.appendChild(card);
-    }
-  }
-
-  function renderCandidateCard(c, settings) {
-    const div = document.createElement("article");
-    div.className = "candidate-card";
-    const wd = getWeekday(settings.startDate, c.dateIdx);
-    const color = getCellColor(c.count, c.capacity, 0); // 후보는 임계값 통과한 것이므로 0
-    const memberChips = c.members
-      .map(
-        (m) =>
-          `<span class="member-chip${m.mijeongAny ? " mijeong" : ""}${
-            m.partialAny ? " partial" : ""
-          }">${escapeHtml(m.name)}${m.mijeongAny ? "(미정)" : ""}${
-            m.partialAny ? "(부분)" : ""
-          }</span>`
-      )
-      .join(" ");
-    const missingChips = c.missingMembers
-      .map((m) => `<span class="member-chip missing">${escapeHtml(m)}</span>`)
-      .join(" ");
-
-    div.innerHTML = `
-      <div class="cand-head" style="border-left:6px solid ${color.bg};">
-        <div class="cand-title">
-          <span class="cand-date">${escapeHtml(c.date)} (${wd})</span>
-          <span class="cand-time">${formatTime(c.startMin)} ~ ${formatTime(c.endMin)}</span>
-          <span class="cand-dur">${c.duration}시간</span>
-        </div>
-        <div class="cand-badge" style="background:${color.bg};color:${color.fg};">
-          ${c.count}/${c.capacity} (${c.percent.toFixed(0)}%)
-        </div>
-      </div>
-      <details class="cand-details" open>
-        <summary>참여 멤버 ${c.count}명${c.mijeongCount ? ` · 미정 ${c.mijeongCount}` : ""}${
-      c.partialCount ? ` · 부분 ${c.partialCount}` : ""
-    }</summary>
-        <div class="cand-members">${memberChips || '<span class="muted">없음</span>'}</div>
-      </details>
-      ${
-        c.missingMembers.length
-          ? `<details class="cand-details">
-              <summary>빠지는 멤버 ${c.missingMembers.length}명</summary>
-              <div class="cand-members">${missingChips}</div>
-            </details>`
-          : ""
-      }
-    `;
-    return div;
-  }
-
   function showAlert(message) {
     const banner = document.getElementById("alert-banner");
     banner.textContent = message;
@@ -712,7 +557,7 @@
   }
 
   /* =======================================================================
-   * 9. CONTROLLER
+   * 8. CONTROLLER
    * ======================================================================= */
 
   const state = {
@@ -721,7 +566,6 @@
     slots: null,
     songsData: null,
     threshold: 60,
-    durationMode: DEFAULTS.duration,
   };
 
   async function loadAndRender() {
@@ -731,7 +575,6 @@
     loading.classList.remove("hidden");
     errorBox.classList.add("hidden");
     document.getElementById("heatmaps").innerHTML = "";
-    document.getElementById("candidates").innerHTML = "";
 
     try {
       const payload = await fetchScheduleData();
@@ -776,7 +619,6 @@
         songsData: state.songsData,
         parseAvailability,
         computeSlotForRanges,
-        findCandidatesForSong,
       };
     } catch (e) {
       console.error(e);
@@ -796,14 +638,6 @@
       state.payload.settings,
       state.threshold
     );
-    renderCandidates(
-      state.songsData,
-      state.payload.dates,
-      state.slots,
-      state.payload.settings,
-      state.threshold,
-      state.durationMode
-    );
   }
 
   function bindControls() {
@@ -815,17 +649,6 @@
       state.threshold = parseInt(e.target.value, 10);
       tval.textContent = state.threshold;
       rerender();
-    });
-
-    document.querySelectorAll(".duration-toggle .toggle-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        document
-          .querySelectorAll(".duration-toggle .toggle-btn")
-          .forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        state.durationMode = btn.dataset.duration;
-        rerender();
-      });
     });
   }
 

@@ -315,11 +315,6 @@ table.heatmap.heatmap-detailed td.cell {
 .member-chip.partial {
   border-style: dashed;
 }
-.member-chip.missing {
-  background: #FDECEA;
-  color: #922B21;
-  border-color: #E74C3C;
-}
 
 /* ---------- Summary block ---------- */
 
@@ -338,75 +333,6 @@ table.heatmap.heatmap-detailed td.cell {
   margin-right: 6px;
 }
 .summary-block.muted { color: var(--muted); font-style: italic; }
-
-/* ---------- Candidate cards ---------- */
-
-.candidate-list {
-  padding: 16px 18px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 14px;
-}
-.candidate-card {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  box-shadow: var(--shadow-sm);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.cand-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  padding-left: 10px;
-}
-.cand-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.cand-date {
-  font-weight: 700;
-  font-size: 14px;
-  color: var(--accent);
-}
-.cand-time {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text);
-}
-.cand-dur {
-  font-size: 12px;
-  color: var(--muted);
-}
-.cand-badge {
-  padding: 6px 10px;
-  border-radius: 16px;
-  font-weight: 700;
-  font-size: 13px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.cand-details {
-  font-size: 12px;
-}
-.cand-details > summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--accent-soft);
-  padding: 4px 0;
-  list-style: revert;
-}
-.cand-members {
-  margin-top: 6px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
 
 /* ---------- Footer & misc ---------- */
 
@@ -432,7 +358,6 @@ table.heatmap.heatmap-detailed td.cell {
   .controls-inner { padding: 12px 16px; gap: 16px; }
   main { padding: 16px; }
   .control-group { min-width: 100%; }
-  .candidate-list { grid-template-columns: 1fr; padding: 12px; }
   .song-header { padding: 12px; }
   .song-header h3 { font-size: 15px; }
   .view-toggle { margin-left: 0; }
