@@ -18,7 +18,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-05-08-r7";
+  const APP_VERSION = "2026-05-09-r11";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -369,51 +369,113 @@
    *   사용자가 셀을 클릭해 잡은 팀 연습 일정. Apps Script(서버)에 POST해서
    *   PropertiesService에 영속화 → 다른 기기에서 새로고침해도 같은 일정 표시.
    *   key 형식: "songName|M/D|hourInt"
+   *
+   *   자료구조: state.bookings는 Map<key, seq>. seq는 단조증가 시퀀스 번호로,
+   *   "예약이 들어온 순서"를 나타낸다. 정렬하면 항상 시간순(=우선권 순). 같은 슬롯에
+   *   여러 곡이 같은 멤버를 잡았을 때 seq가 가장 작은(먼저 잡은) 곡이 멤버를 가져간다.
+   *
+   *   POST 실패 롤백 시에도 그 시점의 seq를 그대로 복원하므로 우선권 자리를 잃지 않음.
+   *   POST는 직렬 큐(opChain)에 태워서 응답이 도착 순서와 무관하게 명령 순서대로
+   *   처리되도록 보장한다.
    * ======================================================================= */
 
   function bookingKey(songName, dateShort, slotStartHour) {
     return `${songName}|${dateShort}|${slotStartHour}`;
   }
 
-  // Apps Script web app에 POST. preflight를 피하려고 Content-Type을 text/plain으로.
-  // 응답으로 서버의 최신 bookings 배열을 받아 클라 상태를 그걸로 동기화한다.
-  async function postBookingChange(action, key) {
-    const res = await fetch(APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action, key }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "서버가 ok=false 반환");
-    return new Set(Array.isArray(data.bookings) ? data.bookings : []);
+  // 서버에서 받은 bookings 배열로 state.bookings(Map)를 초기화.
+  // 배열 순서를 그대로 seq에 매핑 → 페이지 로드/새로고침 직후엔 서버의 삽입 순서가
+  // 우선권 순서가 된다. 이후 사용자가 클라에서 추가/취소를 반복할 때는 ++bookingSeq로
+  // 새 번호를 부여하므로, 서버 응답으로 다시 sync될 때까지는 클라 자체의 seq가 권위.
+  function syncBookingsFromServer(arr) {
+    state.bookings = new Map();
+    state.bookingSeq = 0;
+    if (!Array.isArray(arr)) return;
+    for (const k of arr) {
+      if (typeof k !== "string") continue;
+      // 중복 방지(서버 응답에 같은 key가 두 번 있으면 무시)
+      if (state.bookings.has(k)) continue;
+      state.bookings.set(k, state.bookingSeq++);
+    }
   }
 
-  // 각 (di, si) 셀에서 멤버를 "잡고 있는 곡들" 집합을 사전 계산.
-  //   result["${di}|${si}"] = Map<memberName, Set<songName>>
-  // 한 슬롯에 여러 곡이 동시에 예약될 수 있고, 한 멤버가 여러 곡에 속할 수 있으므로
-  // 단일 곡 이름 대신 Set로 보관. 렌더 시점에서 "이 곡 외 다른 곡이 잡고 있느냐"를
-  // 판정해 막힘 여부 결정.
+  // Apps Script web app에 POST. preflight를 피하려고 Content-Type을 text/plain으로.
+  // 응답으로 서버의 최신 bookings 배열을 받아서 그대로 반환(상태 sync는 호출자가 결정).
+  // action: "add" | "remove" | "clear". clear는 key를 보내지 않는다.
+  async function postBookingChange(action, key) {
+    const body = { action };
+    if (key != null) body.key = key;
+    let res;
+    try {
+      res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw new Error("네트워크 오류: " + e.message);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error("응답 JSON 파싱 실패");
+    }
+    if (!data.ok) throw new Error(data.error || "서버가 ok=false 반환");
+    return Array.isArray(data.bookings) ? data.bookings : [];
+  }
+
+  // 각 (di, si) 셀에서 멤버를 "차지한 곡"을 사전 계산.
+  //   result["${di}|${si}"] = Map<memberName, ownerSongName>
+  // 선착순 우선: 같은 슬롯의 같은 멤버를 두 곡이 동시에 예약했을 때, seq가 더 작은
+  // (먼저 예약된) 곡이 그 멤버를 가져가고, 나머지 곡에서는 "다른 곡에 막힘"으로 처리.
+  // bookings는 Map<key, seq> — seq 오름차순으로 정렬해서 우선권 순서를 명시적으로 보장.
   function computeBlockedAt(bookings, songsData, dates, slots) {
     const result = {};
-    for (const sd of songsData) {
-      const songName = sd.song.name;
-      for (let di = 0; di < dates.length; di++) {
-        const dateShort = formatDateShort(dates[di]);
-        for (let si = 0; si < slots.length; si++) {
-          const slotHour = slots[si][0] / 60;
-          if (!bookings.has(bookingKey(songName, dateShort, slotHour))) continue;
-          const cellKey = `${di}|${si}`;
-          if (!result[cellKey]) result[cellKey] = new Map();
-          for (const mi of sd.cells[di][si].members) {
-            let sources = result[cellKey].get(mi.name);
-            if (!sources) {
-              sources = new Set();
-              result[cellKey].set(mi.name, sources);
-            }
-            sources.add(songName);
-          }
-        }
+    const songByName = new Map();
+    for (const sd of songsData) songByName.set(sd.song.name, sd);
+    const dateIndex = new Map();
+    for (let i = 0; i < dates.length; i++) {
+      dateIndex.set(formatDateShort(dates[i]), i);
+    }
+    const slotIndex = new Map();
+    for (let i = 0; i < slots.length; i++) {
+      slotIndex.set(slots[i][0] / 60, i);
+    }
+
+    // seq 오름차순 정렬 (작은 seq = 먼저 예약 = 우선권 높음).
+    // seq가 같은 경우는 이론상 없지만(단조증가) 안정성을 위해 key 알파벳 순으로 tiebreak.
+    const orderedKeys = [...bookings.entries()]
+      .sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([k]) => k);
+
+    for (const key of orderedKeys) {
+      // key = "songName|M/D|hourInt" — dateShort/slotHour 포맷이 고정이므로 뒤에서부터 분리.
+      const lastSep = key.lastIndexOf("|");
+      if (lastSep < 0) continue;
+      const firstSep = key.lastIndexOf("|", lastSep - 1);
+      if (firstSep < 0) continue;
+      const songName = key.slice(0, firstSep);
+      const dateShort = key.slice(firstSep + 1, lastSep);
+      const slotHour = parseInt(key.slice(lastSep + 1), 10);
+      if (!Number.isFinite(slotHour)) continue;
+
+      const sd = songByName.get(songName);
+      if (!sd) continue;
+      const di = dateIndex.get(dateShort);
+      if (di == null) continue;
+      const si = slotIndex.get(slotHour);
+      if (si == null) continue;
+      const cell = sd.cells[di] && sd.cells[di][si];
+      if (!cell) continue;
+
+      const cellKey = `${di}|${si}`;
+      if (!result[cellKey]) result[cellKey] = new Map();
+      const ownerMap = result[cellKey];
+      for (const mi of cell.members) {
+        // 이미 더 먼저 들어온 예약이 이 멤버를 차지했다면 그대로 둔다(선착순).
+        if (!ownerMap.has(mi.name)) ownerMap.set(mi.name, songName);
       }
     }
     return result;
@@ -476,7 +538,12 @@
     const classes = [];
     if (mi.low) classes.push("m-low");
     if (mi.blocked) classes.push("m-blocked");
-    return classes.length ? `<span class="${classes.join(" ")}">${text}</span>` : text;
+    const inner = classes.length ? `<span class="${classes.join(" ")}">${text}</span>` : text;
+    // 막힌 멤버 옆에 차단한 곡 이름을 작게 표기 (취소선 바깥에 두어 줄 안 그어지게).
+    if (mi.blocked && mi.blockedBy) {
+      return `${inner}<span class="m-blocked-by">(${escapeHtml(mi.blockedBy)})</span>`;
+    }
+    return inner;
   }
 
   function renderHeatmaps(songsData, dates, slots, settings, threshold, viewMode, bookings, blockedAt) {
@@ -532,21 +599,36 @@
         const dateShort = formatDateShort(dates[di]);
         const isBooked = bookings.has(bookingKey(sd.song.name, dateShort, slotHour));
 
-        // 이 곡 외에 다른 곡이 같은 슬롯에서 멤버를 잡고 있으면 막힘.
-        // 이 곡 자신이 예약된 셀이라도 다른 곡이 함께 잡고 있으면 충돌이므로 표시.
+        // 선착순 우선: 멤버 owner가 다른 곡이면 막힘. 같은 슬롯에 두 곡이 동시 예약돼도
+        // 멤버는 한 명이므로 먼저 잡은 곡(owner)만 카운트하고, 나머지 곡 셀에서는 깎인다.
         const blockedMap = blockedAt[`${di}|${si}`];
         const blockedNames = new Set();
+        const blockedBy = new Map(); // memberName -> 차단한 곡명
+        const blockerCounts = new Map(); // 차단한 곡명 -> 깎인 인원 수(low 제외)
         let blockedAvailableCount = 0;
         if (blockedMap) {
           for (const mi of cell.members) {
-            const sources = blockedMap.get(mi.name);
-            if (sources && [...sources].some((s) => s !== sd.song.name)) {
+            const owner = blockedMap.get(mi.name);
+            if (owner && owner !== sd.song.name) {
               blockedNames.add(mi.name);
-              if (!mi.low) blockedAvailableCount++;
+              blockedBy.set(mi.name, owner);
+              if (!mi.low) {
+                blockedAvailableCount++;
+                blockerCounts.set(owner, (blockerCounts.get(owner) || 0) + 1);
+              }
             }
           }
         }
         const effectiveCount = cell.count - blockedAvailableCount;
+        // 차단 곡 요약: "곡A 2, 곡B 1" 형식. 가나다순 정렬.
+        const blockerSummaryHtml = blockerCounts.size > 0
+          ? `<div class="blocker-summary">${
+              [...blockerCounts.entries()]
+                .sort((a, b) => a[0].localeCompare(b[0], "ko"))
+                .map(([s, n]) => `${escapeHtml(s)} ${n}`)
+                .join(", ")
+            }</div>`
+          : "";
 
         // effective가 0이지만 표시할 내용(strikethrough된 원래 카운트, 막힌 멤버,
         // 또는 1~29분만 가능한 low 멤버 명단 등)이 있는 셀은 getCellColor의 기본
@@ -567,13 +649,22 @@
         }
 
         if (view === "A") {
-          html += `<td class="${cellClass}" style="${style}"${dataAttrs}>${countDisplay}</td>`;
+          // 카운트 + (있으면) 차단 곡 요약을 세로로. 차단이 없는 셀은 기존처럼 카운트만.
+          const inner = blockerSummaryHtml
+            ? `<div class="cell-count">${countDisplay}</div>${blockerSummaryHtml}`
+            : countDisplay;
+          html += `<td class="${cellClass}" style="${style}"${dataAttrs}>${inner}</td>`;
         } else {
           const memberHtml = cell.members
-            .map((m) => memberBadge({ ...m, blocked: blockedNames.has(m.name) }))
+            .map((m) => memberBadge({
+              ...m,
+              blocked: blockedNames.has(m.name),
+              blockedBy: blockedBy.get(m.name),
+            }))
             .join(", ");
           html += `<td class="${cellClass}" style="${style}"${dataAttrs}>
             <div class="cell-count">${countDisplay}</div>
+            ${blockerSummaryHtml}
             <div class="cell-members">${memberHtml}</div>
           </td>`;
         }
@@ -643,8 +734,14 @@
     songsData: null,
     threshold: 60,
     viewMode: "A", // "A" 인원수만, "B" 상세 명단
-    bookings: new Set(), // 서버 페이로드 fetch 후 채워짐
+    bookings: new Map(), // Map<key, seq>. seq 오름차순 = 예약 시간순 = 우선권 순.
+    bookingSeq: 0,        // 단조증가 시퀀스 카운터.
   };
+
+  // 예약 변경 POST 직렬화 큐. 사용자가 빠르게 연속 클릭해도 서버에 도달하는 순서가
+  // 보장되고, 응답이 도착 순서와 무관하게 명령 순서대로 처리된다.
+  let opChain = Promise.resolve();
+  let pendingOps = 0;
 
   async function loadAndRender() {
     hideAlert();
@@ -671,8 +768,15 @@
       state.grid = grid;
       state.slots = slots;
       state.songsData = aggregateSongs(payload, grid, slots);
-      // 서버에서 내려온 예약 목록으로 동기화 (없으면 빈 Set)
-      state.bookings = new Set(Array.isArray(payload.bookings) ? payload.bookings : []);
+      // 서버에서 내려온 예약 목록으로 동기화 — 단, 진행 중인 POST가 있었다면
+      // payload.bookings는 그 POST가 반영되기 전 스냅샷이라 stale.
+      // → 진행 중 op들이 끝날 때까지 기다리고, 그 동안 op들이 자체 sync했을
+      // 것이므로 payload.bookings로 덮어쓰지 않는다.
+      const hadPendingOps = pendingOps > 0;
+      await opChain.catch(() => {});
+      if (!hadPendingOps) {
+        syncBookingsFromServer(payload.bookings);
+      }
 
       // 자체 검증 — 계산 불일치 또는 파싱 실패가 있으면 배너로 즉시 알림.
       // 파싱 실패는 데이터(스프레드시트) 오타일 가능성이 높으므로 반드시 노출.
@@ -689,8 +793,8 @@
 
       // 마지막 업데이트
       const lu = document.getElementById("last-updated");
-      const t = payload.generatedAt ? new Date(payload.generatedAt) : new Date();
-      lu.textContent = "마지막 업데이트: " + t.toLocaleString("ko-KR");
+      const updatedAt = payload.generatedAt ? new Date(payload.generatedAt) : new Date();
+      lu.textContent = "마지막 업데이트: " + updatedAt.toLocaleString("ko-KR");
 
       rerender();
       // 디버그용 노출
@@ -733,6 +837,7 @@
 
   function bindControls() {
     document.getElementById("refresh-btn").addEventListener("click", loadAndRender);
+    document.getElementById("reset-bookings-btn").addEventListener("click", clearAllBookings);
 
     const slider = document.getElementById("threshold-slider");
     const tval = document.getElementById("threshold-value");
@@ -754,27 +859,114 @@
     });
 
     // 셀 클릭으로 예약 토글 (이벤트 위임 — 표는 매 렌더마다 갈리지만 #heatmaps는 그대로).
-    // optimistic 업데이트 → 서버 POST → 응답으로 받은 bookings로 재동기화. 실패 시 롤백.
-    document.getElementById("heatmaps").addEventListener("click", async (e) => {
+    // 동작:
+    //  1) 클릭 시점에 즉시 optimistic 업데이트 + rerender (즉각 피드백).
+    //  2) POST는 opChain에 직렬 추가 → 응답이 도착 순서와 무관하게 명령 순서대로 처리.
+    //  3) 큐가 비었을 때만 서버 응답으로 state sync → 중간 응답으로 인한 깜빡임 방지.
+    //  4) 실패 시: 추가 실패면 그 key만 삭제. 취소 실패면 prevSeq로 정확히 복원
+    //     → 우선권 자리를 잃지 않음.
+    document.getElementById("heatmaps").addEventListener("click", (e) => {
       const td = e.target.closest("td.cell[data-song]");
       if (!td) return;
       const slotHour = parseInt(td.dataset.slotStart, 10);
+      if (!Number.isFinite(slotHour)) return;
       const key = bookingKey(td.dataset.song, td.dataset.date, slotHour);
-      const wasBooked = state.bookings.has(key);
-      const action = wasBooked ? "remove" : "add";
+      toggleBooking(key);
+    });
+  }
 
-      if (wasBooked) state.bookings.delete(key);
-      else state.bookings.add(key);
-      rerender();
+  // 예약 토글. 클릭 시점의 (action, prevSeq)를 캡처하고 optimistic 업데이트를 적용한 뒤
+  // POST를 직렬 큐에 추가한다. 실패 시 캡처해둔 prevSeq로 정확히 복원.
+  function toggleBooking(key) {
+    const wasBooked = state.bookings.has(key);
+    const action = wasBooked ? "remove" : "add";
+    const prevSeq = wasBooked ? state.bookings.get(key) : null;
 
+    // 1) Optimistic 적용 (post-increment로 sync 헬퍼와 카운터 의미를 통일)
+    if (wasBooked) {
+      state.bookings.delete(key);
+    } else {
+      state.bookings.set(key, state.bookingSeq++);
+    }
+    rerender();
+
+    // 2) POST를 직렬 큐에 추가. try/catch는 postBookingChange만 감싸서
+    //    이후 sync/rerender의 예외가 catch로 떨어져 pendingOps가 중복 감소되는 것을 방지.
+    pendingOps++;
+    opChain = opChain.then(async () => {
+      let arr;
       try {
-        state.bookings = await postBookingChange(action, key);
-        rerender();
+        arr = await postBookingChange(action, key);
       } catch (err) {
-        if (wasBooked) state.bookings.add(key);
-        else state.bookings.delete(key);
+        pendingOps--;
+        // 이 작업만 롤백. 다른 진행 중 POST는 그대로 진행되며, 그 응답이 마지막일 때
+        // 서버에서 sync되면서 최종 일관성이 회복된다(서버는 이 실패한 명령을 모르므로
+        // 서버 상태가 곧 정답).
+        if (wasBooked) {
+          // 취소 실패 → 원래 자리(prevSeq)로 복원. 단, 그 사이 다른 경로로 이미
+          // 같은 key가 다시 추가됐다면(예: 중간 sync) 덮어쓰지 않음.
+          if (!state.bookings.has(key) && prevSeq != null) {
+            state.bookings.set(key, prevSeq);
+          }
+        } else {
+          // 추가 실패 → optimistic으로 넣었던 key 제거.
+          state.bookings.delete(key);
+        }
         rerender();
-        showAlert("예약 저장 실패: " + err.message);
+        showAlert("예약 저장 실패: " + (err && err.message ? err.message : err));
+        return;
+      }
+      // POST 성공: 모든 진행 중 POST가 끝났을 때만 서버 응답으로 sync.
+      // 중간에 sync하면 다른 in-flight 작업의 optimistic 상태가 사라져 깜빡임 발생.
+      pendingOps--;
+      if (pendingOps === 0) {
+        syncBookingsFromServer(arr);
+        rerender();
+      }
+    });
+  }
+
+  // 전체 초기화: 사용자 confirm을 받은 뒤 직렬 큐에 clearAll POST를 추가.
+  // 직전에 큐에 들어간 add/remove들이 모두 처리된 다음 clearAll이 서버에서 실행되므로
+  // 경합이 자연스럽게 해소된다(즉 큐 직렬화 덕분에 clearAll은 항상 최후 수행).
+  // optimistic UI를 쓰지 않는 이유: 실패 시 "복원해야 하는 정확한 상태"를 알기 어렵기
+  // 때문(다른 in-flight op들과 엮인 시점에서). 서버 응답을 기다린 뒤 sync하는 게 안전.
+  function clearAllBookings() {
+    const count = state.bookings.size;
+    if (count === 0) {
+      showAlert("초기화할 팀 연습 일정이 없습니다.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `현재 등록된 모든 팀 연습 일정 ${count}건을 초기화합니다.\n\n` +
+      `이 작업은 되돌릴 수 없습니다. 정말 진행하시겠습니까?`
+    );
+    if (!confirmed) return;
+
+    const btn = document.getElementById("reset-bookings-btn");
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "초기화 중...";
+
+    pendingOps++;
+    opChain = opChain.then(async () => {
+      let arr;
+      try {
+        arr = await postBookingChange("clear", null);
+      } catch (err) {
+        pendingOps--;
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        showAlert("전체 초기화 실패: " + (err && err.message ? err.message : err));
+        return;
+      }
+      pendingOps--;
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      // 다른 in-flight op의 optimistic 상태를 덮어쓰지 않도록 큐가 비었을 때만 sync.
+      if (pendingOps === 0) {
+        syncBookingsFromServer(arr);
+        rerender();
       }
     });
   }
