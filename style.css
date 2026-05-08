@@ -227,15 +227,6 @@ main {
   font-size: 12px;
   font-weight: 600;
 }
-.view-toggle {
-  margin-left: auto;
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: #fff;
-}
-
 /* ---------- Heatmap table ---------- */
 
 .heatmap-wrap {
@@ -296,6 +287,9 @@ table.heatmap.heatmap-detailed td.cell {
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
+.m-low {
+  opacity: 0.45;
+}
 
 /* ---------- Summary block ---------- */
 
@@ -341,7 +335,6 @@ table.heatmap.heatmap-detailed td.cell {
   .control-group { min-width: 100%; }
   .song-header { padding: 12px; }
   .song-header h3 { font-size: 15px; }
-  .view-toggle { margin-left: 0; }
   table.heatmap td.cell { min-width: 36px; font-size: 13px; padding: 3px 3px; }
   table.heatmap.heatmap-detailed td.cell { min-width: 78px; }
 }

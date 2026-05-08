@@ -29,6 +29,13 @@
       </label>
       <input type="range" id="threshold-slider" min="0" max="100" step="5" value="60">
     </div>
+    <div class="control-group">
+      <label>표시 형식</label>
+      <div class="toggle-group view-mode-toggle">
+        <button class="toggle-btn active" data-view="A" type="button">인원수만</button>
+        <button class="toggle-btn" data-view="B" type="button">상세 명단</button>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -39,7 +46,7 @@
   <section id="heatmap-section" class="output-section">
     <h2>곡별 시간대별 참여 가능 인원</h2>
     <p class="section-desc">
-      각 셀은 해당 시간대에 30분 이상 참여 가능한 멤버 수를 나타냅니다.
+      각 셀의 숫자는 30분 이상 참여 가능한 멤버 수입니다. 1~29분만 가능한 부원은 명단에 연한 색으로 함께 표시됩니다.
       배경색은 참여율을 의미하며, 임계값 미만인 슬롯은 흐림 처리됩니다.
     </p>
     <div id="heatmaps"></div>

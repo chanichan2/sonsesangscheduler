@@ -200,6 +200,8 @@
     return m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, "0")}`;
   }
 
+  // present: 1분이라도 겹치면 true (명단에 표시)
+  // available: 30분 이상 겹치면 true (인원수 카운트에 포함)
   function computeSlotForRanges(ranges, slotStart, slotEnd, mijeong) {
     let total = 0;
     let unionStart = null;
@@ -213,14 +215,14 @@
         if (unionEnd == null || ie > unionEnd) unionEnd = ie;
       }
     }
-    if (total < 30) {
-      return { available: false, mijeong, memos: [] };
+    if (total <= 0) {
+      return { present: false, available: false, mijeong, memos: [] };
     }
     const memos = [];
     if (unionStart > slotStart) memos.push(`${formatTime(unionStart)}~`);
     if (unionEnd < slotEnd) memos.push(`~${formatTime(unionEnd)}`);
     if (mijeong) memos.push("미정");
-    return { available: true, mijeong, memos };
+    return { present: true, available: total >= 30, mijeong, memos };
   }
 
   function buildHourlyGrid(payload) {
@@ -278,12 +280,17 @@
           const members = [];
           for (const m of song.members) {
             const c = grid[m] && grid[m][di] && grid[m][di][si];
-            if (c && c.available) {
-              members.push({ name: m, mijeong: c.mijeong, memos: c.memos });
+            if (c && c.present) {
+              members.push({
+                name: m,
+                mijeong: c.mijeong,
+                memos: c.memos,
+                low: !c.available, // 1~29분만 가능 → 명단에 표시하되 카운트엔 미포함
+              });
             }
           }
           members.sort((a, b) => a.name.localeCompare(b.name, "ko"));
-          const count = members.length;
+          const count = members.filter((m) => !m.low).length;
           const percent = song.capacity > 0 ? (count / song.capacity) * 100 : 0;
           row.push({ count, percent, members });
         }
@@ -399,10 +406,11 @@
 
   function memberBadge(mi) {
     const memoText = mi.memos.length ? `(${mi.memos.join(",")})` : "";
-    return escapeHtml(mi.name + memoText);
+    const text = escapeHtml(mi.name + memoText);
+    return mi.low ? `<span class="m-low">${text}</span>` : text;
   }
 
-  function renderHeatmaps(songsData, dates, slots, settings, threshold) {
+  function renderHeatmaps(songsData, dates, slots, settings, threshold, viewMode) {
     const root = document.getElementById("heatmaps");
     root.innerHTML = "";
     if (!songsData.length) {
@@ -418,36 +426,14 @@
       header.innerHTML = `
         <h3>${escapeHtml(sd.song.name)}</h3>
         <span class="capacity-badge">정원 ${sd.song.capacity}명</span>
-        <div class="view-toggle" role="group">
-          <button class="toggle-btn active" data-view="A">인원수만</button>
-          <button class="toggle-btn" data-view="B">상세 명단</button>
-          <button class="toggle-btn" data-view="AB">둘 다</button>
-        </div>
       `;
       card.appendChild(header);
 
-      const tableA = buildHeatmapTable(sd, dates, slots, settings, threshold, "A");
-      const tableB = buildHeatmapTable(sd, dates, slots, settings, threshold, "B");
-      tableA.dataset.view = "A";
-      tableB.dataset.view = "B";
-      tableB.style.display = "none";
-      card.appendChild(tableA);
-      card.appendChild(tableB);
+      const table = buildHeatmapTable(sd, dates, slots, settings, threshold, viewMode);
+      card.appendChild(table);
 
-      // 미정/부분참여 요약
       const summary = buildSongSummary(sd, dates, slots);
       card.appendChild(summary);
-
-      // 토글 핸들러
-      header.querySelectorAll(".toggle-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          header.querySelectorAll(".toggle-btn").forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-          const view = btn.dataset.view;
-          tableA.style.display = view === "B" ? "none" : "";
-          tableB.style.display = view === "A" ? "none" : "";
-        });
-      });
 
       root.appendChild(card);
     }
@@ -549,6 +535,7 @@
     slots: null,
     songsData: null,
     threshold: 60,
+    viewMode: "A", // "A" 인원수만, "B" 상세 명단
   };
 
   async function loadAndRender() {
@@ -619,7 +606,8 @@
       state.payload.dates,
       state.slots,
       state.payload.settings,
-      state.threshold
+      state.threshold,
+      state.viewMode
     );
   }
 
@@ -632,6 +620,17 @@
       state.threshold = parseInt(e.target.value, 10);
       tval.textContent = state.threshold;
       rerender();
+    });
+
+    document.querySelectorAll(".view-mode-toggle .toggle-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document
+          .querySelectorAll(".view-mode-toggle .toggle-btn")
+          .forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        state.viewMode = btn.dataset.view;
+        rerender();
+      });
     });
   }
 
