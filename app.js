@@ -18,7 +18,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-05-08-r6";
+  const APP_VERSION = "2026-05-08-r7";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -203,25 +203,35 @@
 
   // present: 1분이라도 겹치면 true (명단에 표시)
   // available: 30분 이상 겹치면 true (인원수 카운트에 포함)
+  // 슬롯 안에서 가용 시간이 분리된 두 구간으로 들어오는 케이스(예: 9:00~9:15,
+  // 9:30~9:45)를 union으로 뭉뚱그리지 않고 각 구간 그대로 메모.
   function computeSlotForRanges(ranges, slotStart, slotEnd, mijeong) {
     let total = 0;
-    let unionStart = null;
-    let unionEnd = null;
+    const slices = [];
     for (const [rs, re] of ranges) {
       const is = Math.max(rs, slotStart);
       const ie = Math.min(re, slotEnd);
       if (is < ie) {
         total += ie - is;
-        if (unionStart == null || is < unionStart) unionStart = is;
-        if (unionEnd == null || ie > unionEnd) unionEnd = ie;
+        slices.push([is, ie]);
       }
     }
     if (total <= 0) {
       return { present: false, available: false, mijeong, memos: [] };
     }
+    // 슬롯 전체를 단일 구간으로 덮으면 메모 생략.
+    const fullCoverage =
+      slices.length === 1 && slices[0][0] === slotStart && slices[0][1] === slotEnd;
     const memos = [];
-    if (unionStart > slotStart) memos.push(`${formatTime(unionStart)}~`);
-    if (unionEnd < slotEnd) memos.push(`~${formatTime(unionEnd)}`);
+    if (!fullCoverage) {
+      for (const [is, ie] of slices) {
+        const sStr = is === slotStart ? "" : formatTime(is);
+        const eStr = ie === slotEnd ? "" : formatTime(ie);
+        if (sStr && eStr) memos.push(`${sStr}~${eStr}`);
+        else if (sStr) memos.push(`${sStr}~`);
+        else memos.push(`~${eStr}`);
+      }
+    }
     if (mijeong) memos.push("미정");
     return { present: true, available: total >= 30, mijeong, memos };
   }
@@ -538,11 +548,11 @@
         }
         const effectiveCount = cell.count - blockedAvailableCount;
 
-        // effective가 0이 됐지만 셀에 표시할 내용(strikethrough된 원래 카운트 + 막힌
-        // 멤버 명단)이 있는 경우, getCellColor는 fg=transparent를 돌려줘 통째로
-        // 글자가 안 보임. 그래서 dim 색으로 강제 보정.
+        // effective가 0이지만 표시할 내용(strikethrough된 원래 카운트, 막힌 멤버,
+        // 또는 1~29분만 가능한 low 멤버 명단 등)이 있는 셀은 getCellColor의 기본
+        // fg=transparent로는 글자가 안 보임 → dim 색으로 강제 보정.
         let color = getCellColor(effectiveCount, cap, threshold);
-        if (effectiveCount === 0 && cell.count > 0) {
+        if (effectiveCount === 0 && cell.members.length > 0) {
           color = { bg: "#ECF0F1", fg: "#7F8C8D", dim: true };
         }
         const style = `background:${color.bg};color:${color.fg};`;
@@ -647,7 +657,9 @@
     try {
       const payload = await fetchScheduleData();
       state.payload = payload;
-      state.threshold = payload.settings.thresholdPercent;
+      // 시트의 thresholdPercent 셀이 비었거나 잘못 들어온 경우 60으로 기본값 보정.
+      const t = Number(payload.settings && payload.settings.thresholdPercent);
+      state.threshold = Number.isFinite(t) ? t : 60;
 
       // 슬라이더 동기화
       const slider = document.getElementById("threshold-slider");
