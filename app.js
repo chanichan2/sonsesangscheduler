@@ -533,7 +533,13 @@
         }
         const effectiveCount = cell.count - blockedAvailableCount;
 
-        const color = getCellColor(effectiveCount, cap, threshold);
+        // effective가 0이 됐지만 셀에 표시할 내용(strikethrough된 원래 카운트 + 막힌
+        // 멤버 명단)이 있는 경우, getCellColor는 fg=transparent를 돌려줘 통째로
+        // 글자가 안 보임. 그래서 dim 색으로 강제 보정.
+        let color = getCellColor(effectiveCount, cap, threshold);
+        if (effectiveCount === 0 && cell.count > 0) {
+          color = { bg: "#ECF0F1", fg: "#7F8C8D", dim: true };
+        }
         const style = `background:${color.bg};color:${color.fg};`;
         const cellClass = `cell${view === "B" ? " cell-detail" : ""}${isBooked ? " cell-booked" : ""}`;
         const dataAttrs = ` data-song="${escapeHtml(sd.song.name)}" data-date="${escapeHtml(dateShort)}" data-slot-start="${slotHour}"`;
