@@ -217,8 +217,8 @@
       return { available: false, mijeong, memos: [] };
     }
     const memos = [];
-    if (unionStart > slotStart) memos.push(`${formatTime(unionStart)}부터`);
-    if (unionEnd < slotEnd) memos.push(`~${formatTime(unionEnd)}까지`);
+    if (unionStart > slotStart) memos.push(`${formatTime(unionStart)}~`);
+    if (unionEnd < slotEnd) memos.push(`~${formatTime(unionEnd)}`);
     if (mijeong) memos.push("미정");
     return { available: true, mijeong, memos };
   }
@@ -282,6 +282,7 @@
               members.push({ name: m, mijeong: c.mijeong, memos: c.memos });
             }
           }
+          members.sort((a, b) => a.name.localeCompare(b.name, "ko"));
           const count = members.length;
           const percent = song.capacity > 0 ? (count / song.capacity) * 100 : 0;
           row.push({ count, percent, members });
@@ -361,7 +362,7 @@
   function getCellColor(count, capacity, threshold) {
     if (count === 0) return { bg: "#FFFFFF", fg: "transparent", dim: true };
     const percent = capacity > 0 ? (count / capacity) * 100 : 0;
-    if (percent < threshold || percent < 50) {
+    if (percent < threshold) {
       return { bg: "#ECF0F1", fg: "#7F8C8D", dim: true };
     }
     if (percent >= 100) return { bg: "#C0392B", fg: "#FFFFFF" };
@@ -369,7 +370,7 @@
     if (percent >= 75) return { bg: "#F1C40F", fg: "#000000" };
     if (percent >= 60) return { bg: "#82C341", fg: "#000000" };
     if (percent >= 50) return { bg: "#5DADE2", fg: "#000000" };
-    return { bg: "#ECF0F1", fg: "#7F8C8D", dim: true };
+    return { bg: "#AED6F1", fg: "#1B4F72" };
   }
 
   function getWeekday(startDateStr, idx) {
@@ -496,9 +497,9 @@
     const div = document.createElement("div");
     div.className = "song-summary";
 
-    // 멤버별 미정 날짜 수집 (그 날 1슬롯이라도 mijeong이면 그 날을 미정으로)
+    // 멤버별 미정 날짜 수집 (그 날 1슬롯이라도 mijeong이면 그 날을 미정으로).
+    // 부분 참여 정보는 셀 안에 이미 (~HH:MM)/(HH:MM~)로 표시되므로 여기서는 제외.
     const mijeongMap = {}; // member -> Set(date)
-    const partialMap = {}; // member -> [{date, slot, memos}]
     for (let di = 0; di < dates.length; di++) {
       for (let si = 0; si < slots.length; si++) {
         const cell = sd.cells[di][si];
@@ -507,39 +508,23 @@
             if (!mijeongMap[mi.name]) mijeongMap[mi.name] = new Set();
             mijeongMap[mi.name].add(dates[di]);
           }
-          const partial = mi.memos.filter((x) => x !== "미정");
-          if (partial.length) {
-            if (!partialMap[mi.name]) partialMap[mi.name] = [];
-            partialMap[mi.name].push({
-              date: dates[di],
-              slot: `${formatTime(slots[si][0])}~${formatTime(slots[si][1])}`,
-              memo: partial.join(", "),
-            });
-          }
         }
       }
     }
     let html = "";
-    const mEntries = Object.entries(mijeongMap);
+    const mEntries = Object.entries(mijeongMap)
+      .sort((a, b) => a[0].localeCompare(b[0], "ko"));
     if (mEntries.length) {
       html += '<div class="summary-block"><strong>미정 멤버:</strong> ';
       html += mEntries
-        .map(([n, dates]) => `${escapeHtml(n)}(${[...dates].map(escapeHtml).join(", ")})`)
+        .map(
+          ([n, ds]) =>
+            `${escapeHtml(n)}(${[...ds].map((d) => escapeHtml(formatDateShort(d))).join(", ")})`
+        )
         .join(" · ");
       html += "</div>";
     }
-    const pEntries = Object.entries(partialMap);
-    if (pEntries.length) {
-      html += '<div class="summary-block"><strong>부분 참여:</strong> ';
-      html += pEntries
-        .map(([n, infos]) => {
-          const items = infos.map((i) => `${i.date} ${i.slot} ${i.memo}`).join("; ");
-          return `${escapeHtml(n)} — ${escapeHtml(items)}`;
-        })
-        .join(" · ");
-      html += "</div>";
-    }
-    if (!html) html = '<div class="summary-block muted">미정/부분 참여 없음</div>';
+    if (!html) html = '<div class="summary-block muted">미정 멤버 없음</div>';
     div.innerHTML = html;
     return div;
   }
