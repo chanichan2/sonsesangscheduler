@@ -397,10 +397,8 @@
   }
 
   function memberBadge(mi) {
-    const memoText = mi.memos.length ? `(${mi.memos.join(", ")})` : "";
-    return `<span class="member-chip${mi.mijeong ? " mijeong" : ""}${
-      mi.memos.some((x) => x !== "미정") ? " partial" : ""
-    }">${escapeHtml(mi.name)}${escapeHtml(memoText)}</span>`;
+    const memoText = mi.memos.length ? `(${mi.memos.join(",")})` : "";
+    return escapeHtml(mi.name + memoText);
   }
 
   function renderHeatmaps(songsData, dates, slots, settings, threshold) {
@@ -479,7 +477,7 @@
         if (view === "A") {
           html += `<td class="cell" style="${style}">${countLabel}</td>`;
         } else {
-          const memberHtml = cell.members.map(memberBadge).join(" ");
+          const memberHtml = cell.members.map(memberBadge).join(", ");
           html += `<td class="cell cell-detail" style="${style}">
             <div class="cell-count">${countLabel}</div>
             <div class="cell-members">${memberHtml}</div>
