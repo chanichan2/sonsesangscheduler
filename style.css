@@ -153,18 +153,20 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .toggle-group {
-  display: inline-flex;
+  display: flex;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
   background: #fff;
 }
 .toggle-btn {
+  flex: 1;
   background: #fff;
   border: none;
   padding: 8px 14px;
   font-size: 13px;
   color: var(--text);
+  text-align: center;
   border-right: 1px solid var(--border);
   transition: background 0.15s, color 0.15s;
 }

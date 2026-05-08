@@ -460,7 +460,7 @@
         const cell = sd.cells[di][si];
         const color = getCellColor(cell.count, sd.song.capacity, threshold);
         const style = `background:${color.bg};color:${color.fg};`;
-        const countLabel = cell.count > 0 ? cell.count : "";
+        const countLabel = cell.count > 0 ? `${cell.count}/${sd.song.capacity}` : "";
         if (view === "A") {
           html += `<td class="cell" style="${style}">${countLabel}</td>`;
         } else {
