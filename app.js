@@ -18,7 +18,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-05-08-r5";
+  const APP_VERSION = "2026-05-08-r6";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -29,9 +29,6 @@
   // (배포: Apps Script → 배포 → 새 배포 → 웹앱 / 액세스: 모든 사용자)
   const APPS_SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbzb3vbAeP0L_bB0_QJ4jvx_kJDmED5aP15vKJAFnifRuiIMN2HLmcdvAkGwe1ibZNB6/exec";
-
-  // localStorage 키. 스키마 깨질 일이 생기면 v2로 올려서 옛 데이터를 무시.
-  const STORAGE_KEY = "sonsesang.bookings.v1";
 
   /* =======================================================================
    * 2. API
@@ -359,7 +356,8 @@
 
   /* =======================================================================
    * 7. BOOKINGS
-   *   사용자가 셀을 클릭해 잡은 팀 연습 일정. localStorage에 영속화.
+   *   사용자가 셀을 클릭해 잡은 팀 연습 일정. Apps Script(서버)에 POST해서
+   *   PropertiesService에 영속화 → 다른 기기에서 새로고침해도 같은 일정 표시.
    *   key 형식: "songName|M/D|hourInt"
    * ======================================================================= */
 
@@ -367,24 +365,18 @@
     return `${songName}|${dateShort}|${slotStartHour}`;
   }
 
-  function loadBookings() {
-    try {
-      const s = localStorage.getItem(STORAGE_KEY);
-      if (!s) return new Set();
-      const arr = JSON.parse(s);
-      return new Set(Array.isArray(arr) ? arr : []);
-    } catch (e) {
-      console.warn("[bookings] localStorage 로드 실패:", e);
-      return new Set();
-    }
-  }
-
-  function saveBookings(bookings) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([...bookings]));
-    } catch (e) {
-      console.warn("[bookings] localStorage 저장 실패:", e);
-    }
+  // Apps Script web app에 POST. preflight를 피하려고 Content-Type을 text/plain으로.
+  // 응답으로 서버의 최신 bookings 배열을 받아 클라 상태를 그걸로 동기화한다.
+  async function postBookingChange(action, key) {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action, key }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "서버가 ok=false 반환");
+    return new Set(Array.isArray(data.bookings) ? data.bookings : []);
   }
 
   // 각 (di, si) 셀에서 "다른 곡의 예약" 때문에 막힌 멤버 정보를 사전 계산.
@@ -630,7 +622,7 @@
     songsData: null,
     threshold: 60,
     viewMode: "A", // "A" 인원수만, "B" 상세 명단
-    bookings: loadBookings(), // localStorage에서 복원
+    bookings: new Set(), // 서버 페이로드 fetch 후 채워짐
   };
 
   async function loadAndRender() {
@@ -656,6 +648,8 @@
       state.grid = grid;
       state.slots = slots;
       state.songsData = aggregateSongs(payload, grid, slots);
+      // 서버에서 내려온 예약 목록으로 동기화 (없으면 빈 Set)
+      state.bookings = new Set(Array.isArray(payload.bookings) ? payload.bookings : []);
 
       // 자체 검증 — 계산 불일치 또는 파싱 실패가 있으면 배너로 즉시 알림.
       // 파싱 실패는 데이터(스프레드시트) 오타일 가능성이 높으므로 반드시 노출.
@@ -736,16 +730,29 @@
       });
     });
 
-    // 셀 클릭으로 예약 토글 (이벤트 위임 — 표는 매 렌더마다 갈리지만 #heatmaps는 그대로)
-    document.getElementById("heatmaps").addEventListener("click", (e) => {
+    // 셀 클릭으로 예약 토글 (이벤트 위임 — 표는 매 렌더마다 갈리지만 #heatmaps는 그대로).
+    // optimistic 업데이트 → 서버 POST → 응답으로 받은 bookings로 재동기화. 실패 시 롤백.
+    document.getElementById("heatmaps").addEventListener("click", async (e) => {
       const td = e.target.closest("td.cell[data-song]");
       if (!td) return;
       const slotHour = parseInt(td.dataset.slotStart, 10);
       const key = bookingKey(td.dataset.song, td.dataset.date, slotHour);
-      if (state.bookings.has(key)) state.bookings.delete(key);
+      const wasBooked = state.bookings.has(key);
+      const action = wasBooked ? "remove" : "add";
+
+      if (wasBooked) state.bookings.delete(key);
       else state.bookings.add(key);
-      saveBookings(state.bookings);
       rerender();
+
+      try {
+        state.bookings = await postBookingChange(action, key);
+        rerender();
+      } catch (err) {
+        if (wasBooked) state.bookings.add(key);
+        else state.bookings.delete(key);
+        rerender();
+        showAlert("예약 저장 실패: " + err.message);
+      }
     });
   }
 
