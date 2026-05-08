@@ -379,10 +379,11 @@
     return new Set(Array.isArray(data.bookings) ? data.bookings : []);
   }
 
-  // 각 (di, si) 셀에서 "다른 곡의 예약" 때문에 막힌 멤버 정보를 사전 계산.
-  //   result["${di}|${si}"] = Map<memberName, bookedSongName>
-  // 같은 멤버가 여러 곡에서 동시에 막혔다면 가장 먼저 잡은 곡의 이름을 보존(렌더에서
-  // "다른 곡인지" 판정에만 쓰이므로 어떤 곡이든 무방).
+  // 각 (di, si) 셀에서 멤버를 "잡고 있는 곡들" 집합을 사전 계산.
+  //   result["${di}|${si}"] = Map<memberName, Set<songName>>
+  // 한 슬롯에 여러 곡이 동시에 예약될 수 있고, 한 멤버가 여러 곡에 속할 수 있으므로
+  // 단일 곡 이름 대신 Set로 보관. 렌더 시점에서 "이 곡 외 다른 곡이 잡고 있느냐"를
+  // 판정해 막힘 여부 결정.
   function computeBlockedAt(bookings, songsData, dates, slots) {
     const result = {};
     for (const sd of songsData) {
@@ -395,9 +396,12 @@
           const cellKey = `${di}|${si}`;
           if (!result[cellKey]) result[cellKey] = new Map();
           for (const mi of sd.cells[di][si].members) {
-            if (!result[cellKey].has(mi.name)) {
-              result[cellKey].set(mi.name, songName);
+            let sources = result[cellKey].get(mi.name);
+            if (!sources) {
+              sources = new Set();
+              result[cellKey].set(mi.name, sources);
             }
+            sources.add(songName);
           }
         }
       }
@@ -518,14 +522,15 @@
         const dateShort = formatDateShort(dates[di]);
         const isBooked = bookings.has(bookingKey(sd.song.name, dateShort, slotHour));
 
-        // 다른 곡의 예약 때문에 막힌 멤버 식별 (이 곡 자신이 예약된 셀에선 적용 안 함)
+        // 이 곡 외에 다른 곡이 같은 슬롯에서 멤버를 잡고 있으면 막힘.
+        // 이 곡 자신이 예약된 셀이라도 다른 곡이 함께 잡고 있으면 충돌이므로 표시.
         const blockedMap = blockedAt[`${di}|${si}`];
         const blockedNames = new Set();
         let blockedAvailableCount = 0;
-        if (blockedMap && !isBooked) {
+        if (blockedMap) {
           for (const mi of cell.members) {
-            const bookedBy = blockedMap.get(mi.name);
-            if (bookedBy && bookedBy !== sd.song.name) {
+            const sources = blockedMap.get(mi.name);
+            if (sources && [...sources].some((s) => s !== sd.song.name)) {
               blockedNames.add(mi.name);
               if (!mi.low) blockedAvailableCount++;
             }
