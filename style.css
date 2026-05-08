@@ -270,6 +270,11 @@ table.heatmap td.cell {
   padding: 4px 4px;
   min-width: 44px;
   vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+}
+table.heatmap td.cell:not(.cell-detail) {
+  white-space: nowrap;
 }
 table.heatmap.heatmap-detailed td.cell {
   text-align: left;
@@ -281,6 +286,7 @@ table.heatmap.heatmap-detailed td.cell {
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
+  white-space: nowrap;
 }
 .cell-members {
   font-size: 11px;
@@ -291,6 +297,18 @@ table.heatmap.heatmap-detailed td.cell {
 }
 .m-low {
   opacity: 0.45;
+}
+.m-blocked {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+table.heatmap s {
+  opacity: 0.5;
+  font-weight: 500;
+  margin-right: 3px;
+}
+.cell-booked {
+  box-shadow: inset 0 0 0 3px #1B263B;
 }
 
 /* ---------- Summary block ---------- */

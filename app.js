@@ -9,15 +9,16 @@
  *   4. HOURLY GRID
  *   5. AGGREGATION
  *   6. VALIDATION
- *   7. RENDER
- *   8. CONTROLLER
+ *   7. BOOKINGS (예약/일정 + localStorage 영속화)
+ *   8. RENDER
+ *   9. CONTROLLER
  * ========================================================================= */
 
 (function () {
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-05-08-r4";
+  const APP_VERSION = "2026-05-08-r5";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -28,6 +29,9 @@
   // (배포: Apps Script → 배포 → 새 배포 → 웹앱 / 액세스: 모든 사용자)
   const APPS_SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbzb3vbAeP0L_bB0_QJ4jvx_kJDmED5aP15vKJAFnifRuiIMN2HLmcdvAkGwe1ibZNB6/exec";
+
+  // localStorage 키. 스키마 깨질 일이 생기면 v2로 올려서 옛 데이터를 무시.
+  const STORAGE_KEY = "sonsesang.bookings.v1";
 
   /* =======================================================================
    * 2. API
@@ -354,7 +358,63 @@
   }
 
   /* =======================================================================
-   * 7. RENDER
+   * 7. BOOKINGS
+   *   사용자가 셀을 클릭해 잡은 팀 연습 일정. localStorage에 영속화.
+   *   key 형식: "songName|M/D|hourInt"
+   * ======================================================================= */
+
+  function bookingKey(songName, dateShort, slotStartHour) {
+    return `${songName}|${dateShort}|${slotStartHour}`;
+  }
+
+  function loadBookings() {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY);
+      if (!s) return new Set();
+      const arr = JSON.parse(s);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      console.warn("[bookings] localStorage 로드 실패:", e);
+      return new Set();
+    }
+  }
+
+  function saveBookings(bookings) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...bookings]));
+    } catch (e) {
+      console.warn("[bookings] localStorage 저장 실패:", e);
+    }
+  }
+
+  // 각 (di, si) 셀에서 "다른 곡의 예약" 때문에 막힌 멤버 정보를 사전 계산.
+  //   result["${di}|${si}"] = Map<memberName, bookedSongName>
+  // 같은 멤버가 여러 곡에서 동시에 막혔다면 가장 먼저 잡은 곡의 이름을 보존(렌더에서
+  // "다른 곡인지" 판정에만 쓰이므로 어떤 곡이든 무방).
+  function computeBlockedAt(bookings, songsData, dates, slots) {
+    const result = {};
+    for (const sd of songsData) {
+      const songName = sd.song.name;
+      for (let di = 0; di < dates.length; di++) {
+        const dateShort = formatDateShort(dates[di]);
+        for (let si = 0; si < slots.length; si++) {
+          const slotHour = slots[si][0] / 60;
+          if (!bookings.has(bookingKey(songName, dateShort, slotHour))) continue;
+          const cellKey = `${di}|${si}`;
+          if (!result[cellKey]) result[cellKey] = new Map();
+          for (const mi of sd.cells[di][si].members) {
+            if (!result[cellKey].has(mi.name)) {
+              result[cellKey].set(mi.name, songName);
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  /* =======================================================================
+   * 8. RENDER
    * ======================================================================= */
 
   function escapeHtml(s) {
@@ -407,10 +467,13 @@
   function memberBadge(mi) {
     const memoText = mi.memos.length ? `(${mi.memos.join(",")})` : "";
     const text = escapeHtml(mi.name + memoText);
-    return mi.low ? `<span class="m-low">${text}</span>` : text;
+    const classes = [];
+    if (mi.low) classes.push("m-low");
+    if (mi.blocked) classes.push("m-blocked");
+    return classes.length ? `<span class="${classes.join(" ")}">${text}</span>` : text;
   }
 
-  function renderHeatmaps(songsData, dates, slots, settings, threshold, viewMode) {
+  function renderHeatmaps(songsData, dates, slots, settings, threshold, viewMode, bookings, blockedAt) {
     const root = document.getElementById("heatmaps");
     root.innerHTML = "";
     if (!songsData.length) {
@@ -429,7 +492,7 @@
       `;
       card.appendChild(header);
 
-      const table = buildHeatmapTable(sd, dates, slots, settings, threshold, viewMode);
+      const table = buildHeatmapTable(sd, dates, slots, settings, threshold, viewMode, bookings, blockedAt);
       card.appendChild(table);
 
       const summary = buildSongSummary(sd, dates, slots);
@@ -439,7 +502,7 @@
     }
   }
 
-  function buildHeatmapTable(sd, dates, slots, settings, threshold, view) {
+  function buildHeatmapTable(sd, dates, slots, settings, threshold, view, bookings, blockedAt) {
     const wrap = document.createElement("div");
     wrap.className = "heatmap-wrap";
     const tbl = document.createElement("table");
@@ -453,20 +516,51 @@
     }
     html += "</tr></thead><tbody>";
 
+    const cap = sd.song.capacity;
     for (let si = 0; si < slots.length; si++) {
       const [ss, se] = slots[si];
+      const slotHour = ss / 60;
       html += `<tr><th class="slot-label">${formatTime(ss)}~${formatTime(se)}</th>`;
       for (let di = 0; di < dates.length; di++) {
         const cell = sd.cells[di][si];
-        const color = getCellColor(cell.count, sd.song.capacity, threshold);
+        const dateShort = formatDateShort(dates[di]);
+        const isBooked = bookings.has(bookingKey(sd.song.name, dateShort, slotHour));
+
+        // 다른 곡의 예약 때문에 막힌 멤버 식별 (이 곡 자신이 예약된 셀에선 적용 안 함)
+        const blockedMap = blockedAt[`${di}|${si}`];
+        const blockedNames = new Set();
+        let blockedAvailableCount = 0;
+        if (blockedMap && !isBooked) {
+          for (const mi of cell.members) {
+            const bookedBy = blockedMap.get(mi.name);
+            if (bookedBy && bookedBy !== sd.song.name) {
+              blockedNames.add(mi.name);
+              if (!mi.low) blockedAvailableCount++;
+            }
+          }
+        }
+        const effectiveCount = cell.count - blockedAvailableCount;
+
+        const color = getCellColor(effectiveCount, cap, threshold);
         const style = `background:${color.bg};color:${color.fg};`;
-        const countLabel = cell.count > 0 ? `${cell.count}/${sd.song.capacity}` : "";
+        const cellClass = `cell${view === "B" ? " cell-detail" : ""}${isBooked ? " cell-booked" : ""}`;
+        const dataAttrs = ` data-song="${escapeHtml(sd.song.name)}" data-date="${escapeHtml(dateShort)}" data-slot-start="${slotHour}"`;
+
+        let countDisplay = "";
+        if (cell.count > 0) {
+          countDisplay = effectiveCount !== cell.count
+            ? `<s>${cell.count}/${cap}</s>${effectiveCount}/${cap}`
+            : `${cell.count}/${cap}`;
+        }
+
         if (view === "A") {
-          html += `<td class="cell" style="${style}">${countLabel}</td>`;
+          html += `<td class="${cellClass}" style="${style}"${dataAttrs}>${countDisplay}</td>`;
         } else {
-          const memberHtml = cell.members.map(memberBadge).join(", ");
-          html += `<td class="cell cell-detail" style="${style}">
-            <div class="cell-count">${countLabel}</div>
+          const memberHtml = cell.members
+            .map((m) => memberBadge({ ...m, blocked: blockedNames.has(m.name) }))
+            .join(", ");
+          html += `<td class="${cellClass}" style="${style}"${dataAttrs}>
+            <div class="cell-count">${countDisplay}</div>
             <div class="cell-members">${memberHtml}</div>
           </td>`;
         }
@@ -526,7 +620,7 @@
   }
 
   /* =======================================================================
-   * 8. CONTROLLER
+   * 9. CONTROLLER
    * ======================================================================= */
 
   const state = {
@@ -536,6 +630,7 @@
     songsData: null,
     threshold: 60,
     viewMode: "A", // "A" 인원수만, "B" 상세 명단
+    bookings: loadBookings(), // localStorage에서 복원
   };
 
   async function loadAndRender() {
@@ -601,13 +696,21 @@
 
   function rerender() {
     if (!state.songsData) return;
+    const blockedAt = computeBlockedAt(
+      state.bookings,
+      state.songsData,
+      state.payload.dates,
+      state.slots
+    );
     renderHeatmaps(
       state.songsData,
       state.payload.dates,
       state.slots,
       state.payload.settings,
       state.threshold,
-      state.viewMode
+      state.viewMode,
+      state.bookings,
+      blockedAt
     );
   }
 
@@ -631,6 +734,18 @@
         state.viewMode = btn.dataset.view;
         rerender();
       });
+    });
+
+    // 셀 클릭으로 예약 토글 (이벤트 위임 — 표는 매 렌더마다 갈리지만 #heatmaps는 그대로)
+    document.getElementById("heatmaps").addEventListener("click", (e) => {
+      const td = e.target.closest("td.cell[data-song]");
+      if (!td) return;
+      const slotHour = parseInt(td.dataset.slotStart, 10);
+      const key = bookingKey(td.dataset.song, td.dataset.date, slotHour);
+      if (state.bookings.has(key)) state.bookings.delete(key);
+      else state.bookings.add(key);
+      saveBookings(state.bookings);
+      rerender();
     });
   }
 
