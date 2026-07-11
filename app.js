@@ -11,6 +11,7 @@
  *   6. VALIDATION
  *   7. BOOKINGS (예약/일정 + localStorage 영속화)
  *   8. RENDER
+ *   8.5 EXPORT (팀연습 TSV 클립보드 복사)
  *   9. CONTROLLER
  * ========================================================================= */
 
@@ -18,7 +19,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-05-09-r11";
+  const APP_VERSION = "2026-07-09-r12";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -724,6 +725,268 @@
   }
 
   /* =======================================================================
+   * 8.5 EXPORT — 잡은 팀연습을 TSV로 클립보드 복사
+   *   sonsesang2026 스프레드시트 형식(A:날짜 B:시작시각 C:종료시각 D:곡명
+   *   E:연습실(비움) F:참여부원) 그대로. 대상 시트 A2에 붙여넣으면 셀별로
+   *   들어간다. 헤더 행은 포함하지 않는다(2행 이하에 붙여넣는 용도).
+   *
+   *   규칙:
+   *   - 같은 곡·같은 날의 연속된 시간 예약은 한 행으로 병합 (14시+15시 → 14~16)
+   *   - 참여부원은 히트맵과 동일한 30분 룰 적용 (블록과 30분 미만 겹침은 제외)
+   *   - 다른 곡이 선착순으로 차지한 멤버는 그 시간대를 뺀 나머지로 재계산
+   *   - 부분 참여 메모는 병합 블록 기준으로 재계산: 이름(15~), 이름(~16:30),
+   *     이름(14:30~15:30), 미정은 이름(미정) / 이름(15~,미정) 형태
+   * ======================================================================= */
+
+  // "H" 또는 "H:MM" — 시트 입력 규격과 동일하게 정각이면 ":00" 생략
+  function fmtHM(min) {
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m === 0 ? String(h) : `${h}:${String(m).padStart(2, "0")}`;
+  }
+
+  // ranges에서 [s, e) 구간을 뺀 결과를 반환 (원본 불변)
+  function subtractRange(ranges, s, e) {
+    const out = [];
+    for (const [rs, re] of ranges) {
+      if (re <= s || rs >= e) {
+        out.push([rs, re]);
+        continue;
+      }
+      if (rs < s) out.push([rs, s]);
+      if (re > e) out.push([e, re]);
+    }
+    return out;
+  }
+
+  // 병합 블록 기준으로 멤버 한 명의 참여 표기를 계산.
+  // computeSlotForRanges와 같은 30분 룰이되, 블록이 1시간이 아닐 수 있고
+  // 다른 곡에 뺏긴 시간을 뺀 effective ranges를 입력으로 받는다.
+  // 참여 불가(30분 미만)면 null.
+  function exportMemberEntry(name, effRanges, blockStart, blockEnd, mijeong) {
+    let total = 0;
+    const slices = [];
+    for (const [rs, re] of effRanges) {
+      const is = Math.max(rs, blockStart);
+      const ie = Math.min(re, blockEnd);
+      if (is < ie) {
+        total += ie - is;
+        slices.push([is, ie]);
+      }
+    }
+    if (total < 30) return null;
+    const fullCoverage =
+      slices.length === 1 && slices[0][0] === blockStart && slices[0][1] === blockEnd;
+    const memos = [];
+    if (!fullCoverage) {
+      for (const [is, ie] of slices) {
+        const sStr = is === blockStart ? "" : fmtHM(is);
+        const eStr = ie === blockEnd ? "" : fmtHM(ie);
+        if (sStr && eStr) memos.push(`${sStr}~${eStr}`);
+        else if (sStr) memos.push(`${sStr}~`);
+        else memos.push(`~${eStr}`);
+      }
+    }
+    if (mijeong) memos.push("미정");
+    return memos.length ? `${name}(${memos.join(",")})` : name;
+  }
+
+  // di번째 날짜를 "YYYY. M. D" 문자열로. 연도는 설정의 startDate에서 추론하며,
+  // 조사 기간이 해를 넘기는 경우(12월→1월)도 처리. 붙여넣기 시 구글 시트가
+  // 날짜로 자동 인식하는 형식.
+  function exportDateString(di, settings, dates) {
+    const md = formatDateShort(dates[di]);
+    const base =
+      settings && settings.startDate ? new Date(settings.startDate + "T00:00:00") : null;
+    const baseValid = base && !isNaN(base.getTime());
+    const m = md.match(/^(\d{1,2})\/(\d{1,2})$/);
+    if (m && baseValid) {
+      let year = base.getFullYear();
+      if (parseInt(m[1], 10) < base.getMonth() + 1) year += 1;
+      return `${year}. ${parseInt(m[1], 10)}. ${parseInt(m[2], 10)}`;
+    }
+    if (baseValid) {
+      const d = new Date(base);
+      d.setDate(d.getDate() + di);
+      return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`;
+    }
+    return md;
+  }
+
+  // 예약 Map → 내보내기 행 목록. 날짜 → 시작시각 → 곡명 순 정렬.
+  // 현재 payload와 매칭되지 않는 예약(곡/날짜가 사라진 stale key)은 skipped로 집계.
+  function buildExportRows(bookings, payload, songsData, slots) {
+    const { settings, dates, availability } = payload;
+    const startMin = settings.startHour * 60;
+    const endMin = settings.endHour * 60;
+
+    const dateIndex = new Map();
+    for (let i = 0; i < dates.length; i++) dateIndex.set(formatDateShort(dates[i]), i);
+    const slotIndex = new Map();
+    for (let i = 0; i < slots.length; i++) slotIndex.set(slots[i][0] / 60, i);
+    const songByName = new Map();
+    for (const sd of songsData) songByName.set(sd.song.name, sd);
+
+    const blockedAt = computeBlockedAt(bookings, songsData, dates, slots);
+
+    // 곡|날짜 단위로 예약 시각 모으기
+    const groups = new Map();
+    let skipped = 0;
+    for (const key of bookings.keys()) {
+      const lastSep = key.lastIndexOf("|");
+      const firstSep = lastSep < 0 ? -1 : key.lastIndexOf("|", lastSep - 1);
+      if (firstSep < 0) {
+        skipped++;
+        continue;
+      }
+      const songName = key.slice(0, firstSep);
+      const dateShort = key.slice(firstSep + 1, lastSep);
+      const hour = parseInt(key.slice(lastSep + 1), 10);
+      const di = dateIndex.get(dateShort);
+      if (!songByName.has(songName) || di == null || !slotIndex.has(hour)) {
+        skipped++;
+        continue;
+      }
+      const gk = `${songName}|${dateShort}`;
+      if (!groups.has(gk)) groups.set(gk, { songName, di, hours: [] });
+      groups.get(gk).hours.push(hour);
+    }
+
+    const rows = [];
+    for (const g of groups.values()) {
+      const song = songByName.get(g.songName).song;
+      // 연속된 시각을 [시작시, 종료시) 블록으로 병합
+      const hours = [...new Set(g.hours)].sort((a, b) => a - b);
+      const runs = [];
+      for (const h of hours) {
+        const last = runs[runs.length - 1];
+        if (last && h === last[1]) last[1] = h + 1;
+        else runs.push([h, h + 1]);
+      }
+
+      for (const [h0, h1] of runs) {
+        const blockStart = h0 * 60;
+        const blockEnd = h1 * 60;
+        const entries = [];
+        for (const member of song.members) {
+          const raw = (availability[member] || {})[dates[g.di]];
+          let parsed;
+          try {
+            parsed = parseAvailability(raw, startMin, endMin);
+          } catch (_) {
+            parsed = { ranges: [], mijeong: false };
+          }
+          // 다른 곡이 선착순으로 차지한 시간대는 뺀다 (히트맵의 취소선과 동일 기준)
+          let eff = parsed.ranges;
+          for (let h = h0; h < h1; h++) {
+            const ownerMap = blockedAt[`${g.di}|${slotIndex.get(h)}`];
+            const owner = ownerMap && ownerMap.get(member);
+            if (owner && owner !== g.songName) {
+              eff = subtractRange(eff, h * 60, (h + 1) * 60);
+            }
+          }
+          const entry = exportMemberEntry(member, eff, blockStart, blockEnd, parsed.mijeong);
+          if (entry) entries.push(entry);
+        }
+        entries.sort((a, b) => a.localeCompare(b, "ko"));
+        rows.push({
+          di: g.di,
+          startHour: h0,
+          endHour: h1,
+          songName: g.songName,
+          membersStr: entries.join(" "),
+        });
+      }
+    }
+
+    rows.sort(
+      (a, b) =>
+        a.di - b.di ||
+        a.startHour - b.startHour ||
+        a.songName.localeCompare(b.songName, "ko")
+    );
+    return { rows, skipped };
+  }
+
+  function buildTsv(rows, settings, dates) {
+    return rows
+      .map((r) =>
+        [
+          exportDateString(r.di, settings, dates),
+          String(r.startHour),
+          String(r.endHour),
+          r.songName,
+          "", // 연습실은 따로 잡으므로 비워둠
+          r.membersStr,
+        ].join("\t")
+      )
+      .join("\n");
+  }
+
+  async function copyTextToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {
+        /* 폴백으로 진행 */
+      }
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (_) {}
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  async function exportBookingsTsv() {
+    if (!state.payload || !state.songsData) {
+      showAlert("데이터가 아직 로드되지 않았습니다.");
+      return;
+    }
+    if (state.bookings.size === 0) {
+      showAlert("내보낼 팀 연습 일정이 없습니다. 히트맵 셀을 클릭해 먼저 일정을 잡아 주세요.");
+      return;
+    }
+    const { rows, skipped } = buildExportRows(
+      state.bookings,
+      state.payload,
+      state.songsData,
+      state.slots
+    );
+    if (!rows.length) {
+      showAlert(`내보낼 수 있는 일정이 없습니다 (현재 데이터와 맞지 않는 예약 ${skipped}건).`);
+      return;
+    }
+    if (skipped) {
+      console.warn(`[export] 현재 데이터와 매칭되지 않아 제외된 예약 ${skipped}건`);
+    }
+    const tsv = buildTsv(rows, state.payload.settings, state.payload.dates);
+    const ok = await copyTextToClipboard(tsv);
+    if (!ok) {
+      showAlert("클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.");
+      return;
+    }
+    const btn = document.getElementById("export-tsv-btn");
+    if (btn) {
+      const original = "팀연습 TSV 복사";
+      btn.textContent = `복사 완료 ✓ ${rows.length}행`;
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 2000);
+    }
+  }
+
+  /* =======================================================================
    * 9. CONTROLLER
    * ======================================================================= */
 
@@ -805,6 +1068,11 @@
         songsData: state.songsData,
         parseAvailability,
         computeSlotForRanges,
+        buildExportRows,
+        buildTsv,
+        exportDateString,
+        subtractRange,
+        exportMemberEntry,
       };
     } catch (e) {
       console.error(e);
@@ -838,6 +1106,7 @@
   function bindControls() {
     document.getElementById("refresh-btn").addEventListener("click", loadAndRender);
     document.getElementById("reset-bookings-btn").addEventListener("click", clearAllBookings);
+    document.getElementById("export-tsv-btn").addEventListener("click", exportBookingsTsv);
 
     const slider = document.getElementById("threshold-slider");
     const tval = document.getElementById("threshold-value");
