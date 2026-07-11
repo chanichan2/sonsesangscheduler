@@ -312,8 +312,14 @@ table.heatmap td.cell {
   padding: 4px 4px;
   min-width: 44px;
   vertical-align: middle;
-  cursor: pointer;
+  cursor: default; /* 열람 전용 — 클릭 예약은 관리자 모드에서만 */
   user-select: none;
+}
+body.admin-mode table.heatmap td.cell {
+  cursor: pointer;
+}
+body.admin-mode table.heatmap td.cell:hover {
+  filter: brightness(0.93);
 }
 table.heatmap td.cell:not(.cell-detail) {
   white-space: nowrap;

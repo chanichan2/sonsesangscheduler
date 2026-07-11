@@ -15,6 +15,8 @@
  *   5) 스프레드시트 새로고침
  *   6) 상단 메뉴에 "📅 일정조사 도구"가 생긴 것 확인
  *   7) 배포(Deploy) → 배포 관리(Manage deployments) → 기존 배포 편집 → 새 버전(New version) 선택 → 배포
+ *   8) 관리자 토큰 설정: 프로젝트 설정(⚙) → 스크립트 속성 → "ADMIN_TOKEN" 속성 추가
+ *      (값 = 관리자 비밀번호. 코드에는 절대 적지 않는다. 미설정 시 모든 예약 변경이 거부됨)
  *
  * 이 파일은 Apps Script의 백업본. Apps Script 쪽을 수정하면 이쪽도 같이 갱신해 두면 좋음.
  */
@@ -471,7 +473,21 @@ function jsonOut_(obj) {
 }
 
 /**
- * doPost — 팀연습 예약 추가/취소/전체초기화/조회.
+ * 관리자 토큰 검증. 토큰은 스크립트 속성 ADMIN_TOKEN에만 저장한다(코드에 하드코딩 금지).
+ * ADMIN_TOKEN이 설정되어 있지 않으면 항상 false → 모든 변경 액션 거부(안전한 기본값).
+ */
+function isAuthorized_(body) {
+  const stored = PropertiesService.getScriptProperties().getProperty('ADMIN_TOKEN');
+  if (!stored) return false;
+  return typeof body.token === 'string' && body.token === stored;
+}
+
+/**
+ * doPost — 팀연습 예약 추가/취소/전체초기화/조회 + 관리자 토큰 검증.
+ *
+ * 권한: add/remove/clear는 body.token이 스크립트 속성 ADMIN_TOKEN과 일치해야 실행.
+ * 불일치·누락·ADMIN_TOKEN 미설정이면 { ok:false, error:"unauthorized" } 반환.
+ * action:"verify"는 토큰 유효성만 확인하고 예약 데이터는 건드리지 않는다.
  *
  * 동시성 보호: PropertiesService는 read-modify-write가 원자적이지 않아서, 두 사용자가
  * 거의 같은 시간에 다른 셀을 클릭하면 한쪽 변경이 사라질 수 있다. ScriptLock으로 직렬화.
@@ -480,11 +496,26 @@ function doPost(e) {
   const lock = LockService.getScriptLock();
   let acquired = false;
   try {
+    const body = JSON.parse(e.postData.contents);
+
+    // 토큰 확인 전용 액션 — 예약 데이터를 건드리지 않으므로 락 없이 즉시 응답.
+    if (body.action === 'verify') {
+      return isAuthorized_(body)
+        ? jsonOut_({ ok: true })
+        : jsonOut_({ ok: false, error: 'unauthorized' });
+    }
+
+    // 변경 액션은 관리자 토큰 필수. 락을 잡기 전에 거부해 불필요한 대기를 피한다.
+    const isMutation =
+      body.action === 'add' || body.action === 'remove' || body.action === 'clear';
+    if (isMutation && !isAuthorized_(body)) {
+      return jsonOut_({ ok: false, error: 'unauthorized' });
+    }
+
     // 최대 5초까지 락 대기. 실패 시 throw → 아래 catch에서 에러 응답.
     lock.waitLock(5000);
     acquired = true;
 
-    const body = JSON.parse(e.postData.contents);
     let bookings = getBookings_();
     if (body.action === 'add') {
       if (!bookings.includes(body.key)) bookings.push(body.key);

@@ -19,7 +19,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-07-11-r13";
+  const APP_VERSION = "2026-07-11-r14";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -407,9 +407,12 @@
   // Apps Script web app에 POST. preflight를 피하려고 Content-Type을 text/plain으로.
   // 응답으로 서버의 최신 bookings 배열을 받아서 그대로 반환(상태 sync는 호출자가 결정).
   // action: "add" | "remove" | "clear". clear는 key를 보내지 않는다.
+  // 변경 액션은 관리자 토큰이 필요 — 서버가 unauthorized를 반환하면 err.unauthorized로 표시해
+  // 호출자가 일반 실패(네트워크 등)와 구분해 처리할 수 있게 한다.
   async function postBookingChange(action, key) {
     const body = { action };
     if (key != null) body.key = key;
+    if (state.adminToken != null) body.token = state.adminToken;
     let res;
     try {
       res = await fetch(APPS_SCRIPT_URL, {
@@ -427,7 +430,11 @@
     } catch (e) {
       throw new Error("응답 JSON 파싱 실패");
     }
-    if (!data.ok) throw new Error(data.error || "서버가 ok=false 반환");
+    if (!data.ok) {
+      const err = new Error(data.error || "서버가 ok=false 반환");
+      if (data.error === "unauthorized") err.unauthorized = true;
+      throw err;
+    }
     return Array.isArray(data.bookings) ? data.bookings : [];
   }
 
@@ -484,6 +491,129 @@
       }
     }
     return result;
+  }
+
+  /* =======================================================================
+   * 7.5 ADMIN
+   *   공유 관리자 토큰 방식 권한. 토큰 값은 서버(Apps Script 스크립트 속성
+   *   ADMIN_TOKEN)에만 저장되고, 클라이언트는 사용자가 입력한 비밀번호를
+   *   verify 액션으로 확인한 뒤 localStorage에 보관해 세션을 복원한다.
+   *   비관리자는 열람/새로고침/임계값/표시 형식만 가능 — 예약 변경·초기화·
+   *   TSV 복사는 관리자 모드에서만 노출·동작한다.
+   * ======================================================================= */
+
+  const ADMIN_TOKEN_STORAGE_KEY = "sonsesang_admin_token";
+
+  function readStoredAdminToken() {
+    try {
+      return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+    } catch (_) {
+      return null;
+    }
+  }
+  function writeStoredAdminToken(token) {
+    try {
+      localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+    } catch (_) {}
+  }
+  function removeStoredAdminToken() {
+    try {
+      localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    } catch (_) {}
+  }
+
+  // action:"verify" POST — 토큰이 유효하면 true, unauthorized면 false.
+  // 네트워크/서버 오류는 throw (unauthorized와 구분해서 호출자가 처리).
+  async function postVerifyToken(token) {
+    let res;
+    try {
+      res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "verify", token: token }),
+      });
+    } catch (e) {
+      throw new Error("네트워크 오류: " + e.message);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error("응답 JSON 파싱 실패");
+    }
+    if (data && data.ok === true) return true;
+    if (data && data.error === "unauthorized") return false;
+    throw new Error((data && data.error) || "서버가 ok=false 반환");
+  }
+
+  // 관리자 모드 진입/해제에 따른 UI 일괄 토글.
+  // 셀 클릭 커서/호버는 body.admin-mode 클래스로 CSS에서 처리(재렌더 불필요).
+  function setAdminMode(on) {
+    state.isAdmin = on;
+    document.body.classList.toggle("admin-mode", on);
+    document.getElementById("admin-login-btn").classList.toggle("hidden", on);
+    document.getElementById("admin-logout-btn").classList.toggle("hidden", !on);
+    document.getElementById("reset-bookings-btn").classList.toggle("hidden", !on);
+    document.getElementById("export-tsv-btn").classList.toggle("hidden", !on);
+    document.getElementById("section-desc-admin").classList.toggle("hidden", !on);
+    document.getElementById("section-desc-viewer").classList.toggle("hidden", on);
+  }
+
+  // 서버가 unauthorized를 반환했을 때(비밀번호 변경, 토큰 삭제 등) 공통 처리.
+  // optimistic 상태 롤백은 각 호출자의 기존 실패 경로가 담당하므로 여기서는
+  // 토큰/모드 정리와 안내만 한다.
+  function handleUnauthorized() {
+    removeStoredAdminToken();
+    state.adminToken = null;
+    if (state.isAdmin) setAdminMode(false);
+    showAlert("관리자 인증이 만료되었거나 비밀번호가 변경되었습니다. 다시 로그인해 주세요.");
+  }
+
+  async function adminLogin() {
+    const pw = window.prompt("관리자 비밀번호를 입력하세요.");
+    if (pw == null || pw === "") return;
+    let ok;
+    try {
+      ok = await postVerifyToken(pw);
+    } catch (e) {
+      showAlert("관리자 인증 중 오류가 발생했습니다: " + e.message);
+      return;
+    }
+    if (!ok) {
+      showAlert("관리자 비밀번호가 올바르지 않습니다.");
+      return;
+    }
+    hideAlert();
+    state.adminToken = pw;
+    writeStoredAdminToken(pw);
+    setAdminMode(true);
+  }
+
+  function adminLogout() {
+    removeStoredAdminToken();
+    state.adminToken = null;
+    setAdminMode(false);
+  }
+
+  // 페이지 로드 시 localStorage의 토큰으로 관리자 세션 자동 복원.
+  // unauthorized면 토큰 폐기, 네트워크 오류면 토큰은 남겨두고 열람 모드 유지
+  // (다음 로드에서 재시도).
+  async function restoreAdminSession() {
+    const token = readStoredAdminToken();
+    if (!token) return;
+    let ok;
+    try {
+      ok = await postVerifyToken(token);
+    } catch (_) {
+      return;
+    }
+    if (ok) {
+      state.adminToken = token;
+      setAdminMode(true);
+    } else {
+      removeStoredAdminToken();
+    }
   }
 
   /* =======================================================================
@@ -953,6 +1083,7 @@
   }
 
   async function exportBookingsTsv() {
+    if (!state.isAdmin) return; // 관리자 전용 (버튼도 숨겨져 있지만 이중 방어)
     if (!state.payload || !state.songsData) {
       showAlert("데이터가 아직 로드되지 않았습니다.");
       return;
@@ -1005,6 +1136,8 @@
     viewMode: "A", // "A" 인원수만, "B" 상세 명단
     bookings: new Map(), // Map<key, seq>. seq 오름차순 = 예약 시간순 = 우선권 순.
     bookingSeq: 0,        // 단조증가 시퀀스 카운터.
+    isAdmin: false,       // 관리자 모드 여부 (verify 성공 시에만 true)
+    adminToken: null,     // 검증된 관리자 토큰. 변경 POST body에 포함.
   };
 
   // 예약 변경 POST 직렬화 큐. 사용자가 빠르게 연속 클릭해도 서버에 도달하는 순서가
@@ -1128,6 +1261,8 @@
     document.getElementById("refresh-btn").addEventListener("click", loadAndRender);
     document.getElementById("reset-bookings-btn").addEventListener("click", clearAllBookings);
     document.getElementById("export-tsv-btn").addEventListener("click", exportBookingsTsv);
+    document.getElementById("admin-login-btn").addEventListener("click", adminLogin);
+    document.getElementById("admin-logout-btn").addEventListener("click", adminLogout);
 
     const slider = document.getElementById("threshold-slider");
     const tval = document.getElementById("threshold-value");
@@ -1156,6 +1291,7 @@
     //  4) 실패 시: 추가 실패면 그 key만 삭제. 취소 실패면 prevSeq로 정확히 복원
     //     → 우선권 자리를 잃지 않음.
     document.getElementById("heatmaps").addEventListener("click", (e) => {
+      if (!state.isAdmin) return; // 열람 전용 사용자는 예약 변경 불가
       const td = e.target.closest("td.cell[data-song]");
       if (!td) return;
       const slotHour = parseInt(td.dataset.slotStart, 10);
@@ -1203,7 +1339,11 @@
           state.bookings.delete(key);
         }
         rerender();
-        showAlert("예약 저장 실패: " + (err && err.message ? err.message : err));
+        if (err && err.unauthorized) {
+          handleUnauthorized();
+        } else {
+          showAlert("예약 저장 실패: " + (err && err.message ? err.message : err));
+        }
         return;
       }
       // POST 성공: 모든 진행 중 POST가 끝났을 때만 서버 응답으로 sync.
@@ -1222,6 +1362,7 @@
   // optimistic UI를 쓰지 않는 이유: 실패 시 "복원해야 하는 정확한 상태"를 알기 어렵기
   // 때문(다른 in-flight op들과 엮인 시점에서). 서버 응답을 기다린 뒤 sync하는 게 안전.
   function clearAllBookings() {
+    if (!state.isAdmin) return; // 관리자 전용 (버튼도 숨겨져 있지만 이중 방어)
     const count = state.bookings.size;
     if (count === 0) {
       showAlert("초기화할 팀 연습 일정이 없습니다.");
@@ -1247,7 +1388,11 @@
         pendingOps--;
         btn.disabled = false;
         btn.textContent = originalLabel;
-        showAlert("전체 초기화 실패: " + (err && err.message ? err.message : err));
+        if (err && err.unauthorized) {
+          handleUnauthorized();
+        } else {
+          showAlert("전체 초기화 실패: " + (err && err.message ? err.message : err));
+        }
         return;
       }
       pendingOps--;
@@ -1263,6 +1408,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     bindControls();
+    restoreAdminSession(); // 저장된 토큰이 있으면 verify 후 관리자 모드 자동 복원 (비동기)
     if (APPS_SCRIPT_URL.includes("REPLACE_WITH_YOUR_DEPLOYMENT_ID")) {
       const errorBox = document.getElementById("error");
       errorBox.innerHTML =
