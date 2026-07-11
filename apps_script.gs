@@ -354,21 +354,46 @@ function doGet(e) {
     }
 
     // 곡정보 시트 읽기
+    // 열 구성(신규): A 곡명 / B 정원 / C 팀장 / D부터 멤버1..n
+    // C열이 '팀장' 열인지는 헤더(1~3행)의 C열에 "팀장"이라고 적혀 있는지로 감지한다.
+    // → 아직 열을 삽입하지 않은 구버전 시트(A 곡명 / B 정원 / C부터 멤버)도 그대로 동작하므로
+    //   "스크립트 먼저 재배포 → 그 다음 시트에 열 삽입" 순서로 진행하면 중간에 깨지는 순간이 없다.
     const songSheet = ss.getSheetByName("곡정보");
     const songData = songSheet.getDataRange().getValues();
+    let hasLeaderCol = false;
+    for (let i = 0; i < Math.min(3, songData.length); i++) {
+      const h = songData[i][2];
+      if (h != null && String(h).replace(/\s+/g, "") === "팀장") {
+        hasLeaderCol = true;
+        break;
+      }
+    }
+    const memberStartCol = hasLeaderCol ? 3 : 2;
     const songs = [];
     for (let i = 3; i < songData.length; i++) {
       const row = songData[i];
       if (!row[0]) continue;
       const members = [];
-      for (let j = 2; j < row.length; j++) {
+      for (let j = memberStartCol; j < row.length; j++) {
         if (row[j] && String(row[j]).trim()) {
           members.push(String(row[j]).trim());
         }
       }
+      // 팀장 — 2명 이상이면 콤마 구분("현찬, 민재" / "현찬,민재"). 전각 콤마(，、)도 허용.
+      let leaders = [];
+      if (hasLeaderCol && row[2] != null && String(row[2]).trim() !== "") {
+        leaders = String(row[2])
+          .replace(/[，、]/g, ",")
+          .split(",")
+          .map(function (s) { return s.trim(); })
+          .filter(function (s) { return s !== ""; });
+        // 중복 제거
+        leaders = leaders.filter(function (s, k) { return leaders.indexOf(s) === k; });
+      }
       songs.push({
         name: String(row[0]).trim(),
         capacity: parseInt(row[1], 10) || members.length,
+        leaders: leaders,
         members: members,
       });
     }

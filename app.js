@@ -19,7 +19,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-07-09-r12";
+  const APP_VERSION = "2026-07-11-r13";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -285,6 +285,9 @@
     const { dates, songs } = payload;
     const out = [];
     for (const song of songs) {
+      // 팀장 — 명단에서 볼드로 표시하기 위한 곡별 집합.
+      // 구버전 Apps Script 배포는 leaders 필드가 없으므로 || []로 방어.
+      const leaderSet = new Set(song.leaders || []);
       const cells = []; // cells[dateIdx][slotIdx]
       for (let di = 0; di < dates.length; di++) {
         const row = [];
@@ -298,6 +301,7 @@
                 mijeong: c.mijeong,
                 memos: c.memos,
                 low: !c.available, // 1~29분만 가능 → 명단에 표시하되 카운트엔 미포함
+                leader: leaderSet.has(m),
               });
             }
           }
@@ -537,6 +541,7 @@
     const memoText = mi.memos.length ? `(${mi.memos.join(",")})` : "";
     const text = escapeHtml(mi.name + memoText);
     const classes = [];
+    if (mi.leader) classes.push("m-leader"); // 팀장은 볼드
     if (mi.low) classes.push("m-low");
     if (mi.blocked) classes.push("m-blocked");
     const inner = classes.length ? `<span class="${classes.join(" ")}">${text}</span>` : text;
@@ -681,6 +686,7 @@
   function buildSongSummary(sd, dates, slots) {
     const div = document.createElement("div");
     div.className = "song-summary";
+    const leaderSet = new Set(sd.song.leaders || []); // 팀장은 요약에서도 볼드
 
     // 멤버별 미정 날짜 수집 (그 날 1슬롯이라도 mijeong이면 그 날을 미정으로).
     // 부분 참여 정보는 셀 안에 이미 (~HH:MM)/(HH:MM~)로 표시되므로 여기서는 제외.
@@ -702,10 +708,10 @@
     if (mEntries.length) {
       html += '<div class="summary-block"><strong>미정 멤버:</strong> ';
       html += mEntries
-        .map(
-          ([n, ds]) =>
-            `${escapeHtml(n)}(${[...ds].map((d) => escapeHtml(formatDateShort(d))).join(", ")})`
-        )
+        .map(([n, ds]) => {
+          const nameHtml = leaderSet.has(n) ? `<strong>${escapeHtml(n)}</strong>` : escapeHtml(n);
+          return `${nameHtml}(${[...ds].map((d) => escapeHtml(formatDateShort(d))).join(", ")})`;
+        })
         .join(" · ");
       html += "</div>";
     }
@@ -1041,6 +1047,17 @@
         syncBookingsFromServer(payload.bookings);
       }
 
+      // 팀장 이름이 그 곡의 멤버 명단에 없으면(오타/누락) 볼드가 조용히 빠지므로 경고 노출.
+      const leaderIssues = [];
+      for (const song of payload.songs) {
+        for (const l of song.leaders || []) {
+          if (!song.members.includes(l)) leaderIssues.push(`${song.name}: ${l}`);
+        }
+      }
+      if (leaderIssues.length) {
+        console.warn("[data] 곡정보의 팀장 이름이 멤버 명단과 일치하지 않음:", leaderIssues);
+      }
+
       // 자체 검증 — 계산 불일치 또는 파싱 실패가 있으면 배너로 즉시 알림.
       // 파싱 실패는 데이터(스프레드시트) 오타일 가능성이 높으므로 반드시 노출.
       const errs = selfValidate(state.songsData, payload, slots);
@@ -1051,6 +1068,10 @@
       } else if (parseFailures.length) {
         showAlert(
           `파싱 실패 셀 ${parseFailures.length}건이 있습니다. 해당 항목은 "불가"로 처리됩니다 (콘솔 참고).`
+        );
+      } else if (leaderIssues.length) {
+        showAlert(
+          `곡정보 시트의 팀장 이름 ${leaderIssues.length}건이 그 곡의 멤버 명단과 일치하지 않습니다 (콘솔 참고).`
         );
       }
 

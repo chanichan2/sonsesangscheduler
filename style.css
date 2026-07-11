@@ -337,6 +337,9 @@ table.heatmap.heatmap-detailed td.cell {
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
+.m-leader {
+  font-weight: 700; /* 곡 팀장 */
+}
 .m-low {
   opacity: 0.45;
 }
