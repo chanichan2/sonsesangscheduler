@@ -405,14 +405,7 @@ table.heatmap s {
 }
 .summary-block.muted { color: var(--muted); font-style: italic; }
 
-/* ---------- Footer & misc ---------- */
-
-.app-footer {
-  text-align: center;
-  color: var(--muted);
-  padding: 24px;
-  font-size: 12px;
-}
+/* ---------- Misc ---------- */
 
 .empty {
   padding: 16px;
