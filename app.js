@@ -19,7 +19,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-07-11-r14";
+  const APP_VERSION = "2026-07-11-r15";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -404,6 +404,23 @@
     }
   }
 
+  // 서버가 준 key 배열과 현재 state.bookings의 key 집합이 같은지 비교(순서 무시).
+  // seq(순서)는 클라이언트가 권위를 갖는 값이므로 순서 차이로 재렌더하면 안 된다.
+  // 집합이 같으면 sync도 rerender도 건너뛸 수 있다 — 몇 초 뒤 전체 재생성이 터지면서
+  // 화면이 튀던 주원인이 이 무조건 재렌더였다.
+  function bookingKeySetsEqual(arr, bookings) {
+    if (!Array.isArray(arr)) return false;
+    const serverKeys = new Set();
+    for (const k of arr) {
+      if (typeof k === "string") serverKeys.add(k);
+    }
+    if (serverKeys.size !== bookings.size) return false;
+    for (const k of serverKeys) {
+      if (!bookings.has(k)) return false;
+    }
+    return true;
+  }
+
   // Apps Script web app에 POST. preflight를 피하려고 Content-Type을 text/plain으로.
   // 응답으로 서버의 최신 bookings 배열을 받아서 그대로 반환(상태 sync는 호출자가 결정).
   // action: "add" | "remove" | "clear". clear는 key를 보내지 않는다.
@@ -682,7 +699,7 @@
     return inner;
   }
 
-  function renderHeatmaps(songsData, dates, slots, settings, threshold, viewMode, bookings, blockedAt) {
+  function renderHeatmaps(songsData, dates, slots, settings, threshold, viewMode, bookings, blockedAt, pendingKeys) {
     const root = document.getElementById("heatmaps");
     root.innerHTML = "";
     if (!songsData.length) {
@@ -701,7 +718,7 @@
       `;
       card.appendChild(header);
 
-      const table = buildHeatmapTable(sd, dates, slots, settings, threshold, viewMode, bookings, blockedAt);
+      const table = buildHeatmapTable(sd, dates, slots, settings, threshold, viewMode, bookings, blockedAt, pendingKeys);
       card.appendChild(table);
 
       const summary = buildSongSummary(sd, dates, slots);
@@ -711,9 +728,11 @@
     }
   }
 
-  function buildHeatmapTable(sd, dates, slots, settings, threshold, view, bookings, blockedAt) {
+  function buildHeatmapTable(sd, dates, slots, settings, threshold, view, bookings, blockedAt, pendingKeys) {
     const wrap = document.createElement("div");
     wrap.className = "heatmap-wrap";
+    // 재렌더 시 곡별 가로 스크롤 위치를 곡 이름으로 매칭해 복원하기 위한 식별자.
+    wrap.dataset.song = sd.song.name;
     const tbl = document.createElement("table");
     tbl.className = "heatmap" + (view === "B" ? " heatmap-detailed" : "");
     let html = "<thead><tr><th class='corner'>시간 \\ 날짜</th>";
@@ -733,7 +752,10 @@
       for (let di = 0; di < dates.length; di++) {
         const cell = sd.cells[di][si];
         const dateShort = formatDateShort(dates[di]);
-        const isBooked = bookings.has(bookingKey(sd.song.name, dateShort, slotHour));
+        const cellKey = bookingKey(sd.song.name, dateShort, slotHour);
+        const isBooked = bookings.has(cellKey);
+        // 아직 서버 응답을 못 받은 칸 = 미확정. 기존 렌더 경로에서 클래스만 하나 더 붙인다.
+        const isPending = pendingKeys ? pendingKeys.has(cellKey) : false;
 
         // 선착순 우선: 멤버 owner가 다른 곡이면 막힘. 같은 슬롯에 두 곡이 동시 예약돼도
         // 멤버는 한 명이므로 먼저 잡은 곡(owner)만 카운트하고, 나머지 곡 셀에서는 깎인다.
@@ -774,8 +796,8 @@
           color = { bg: "#ECF0F1", fg: "#7F8C8D", dim: true };
         }
         const style = `background:${color.bg};color:${color.fg};`;
-        const cellClass = `cell${view === "B" ? " cell-detail" : ""}${isBooked ? " cell-booked" : ""}`;
-        const dataAttrs = ` data-song="${escapeHtml(sd.song.name)}" data-date="${escapeHtml(dateShort)}" data-slot-start="${slotHour}"`;
+        const cellClass = `cell${view === "B" ? " cell-detail" : ""}${isBooked ? " cell-booked" : ""}${isPending ? " cell-pending" : ""}`;
+        const dataAttrs = ` data-song="${escapeHtml(sd.song.name)}" data-date="${escapeHtml(dateShort)}" data-slot-start="${slotHour}"${isPending ? ' aria-busy="true"' : ""}`;
 
         let countDisplay = "";
         if (cell.count > 0) {
@@ -1138,6 +1160,8 @@
     bookingSeq: 0,        // 단조증가 시퀀스 카운터.
     isAdmin: false,       // 관리자 모드 여부 (verify 성공 시에만 true)
     adminToken: null,     // 검증된 관리자 토큰. 변경 POST body에 포함.
+    // 아직 서버 응답을 받지 못한(=저장 중) 예약 key 집합. 해당 칸은 반투명 + aria-busy.
+    pendingKeys: new Set(),
   };
 
   // 예약 변경 POST 직렬화 큐. 사용자가 빠르게 연속 클릭해도 서버에 도달하는 순서가
@@ -1149,6 +1173,9 @@
     hideAlert();
     const loading = document.getElementById("loading");
     const errorBox = document.getElementById("error");
+    // 표를 비우기 "전"에 스크롤 위치를 기록 — 비우는 순간 페이지 높이가 붕괴한다.
+    // 곡 구성이 바뀌어 복원 대상이 사라졌으면 브라우저가 알아서 clamp한다.
+    const savedScroll = captureScrollState();
     loading.classList.remove("hidden");
     errorBox.classList.add("hidden");
     document.getElementById("heatmaps").innerHTML = "";
@@ -1214,6 +1241,7 @@
       lu.textContent = "마지막 업데이트: " + updatedAt.toLocaleString("ko-KR");
 
       rerender();
+      restoreScrollState(savedScroll);
       // 디버그용 노출
       window.__test = {
         payload: state.payload,
@@ -1237,8 +1265,49 @@
     }
   }
 
+  // #heatmaps 전체 재생성 "직전"의 스크롤 위치를 기록한다.
+  //   - 세로: window 스크롤 (DOM이 사라지는 순간 페이지 높이가 붕괴해 맨 위로 튄다)
+  //   - 가로: 곡별 .heatmap-wrap[data-song]의 scrollLeft
+  function captureScrollState() {
+    const wraps = new Map();
+    document.querySelectorAll("#heatmaps .heatmap-wrap[data-song]").forEach((w) => {
+      wraps.set(w.dataset.song, w.scrollLeft);
+    });
+    return { x: window.scrollX, y: window.scrollY, wraps };
+  }
+
+  // 재생성 "직후 동기적으로" 복원한다. requestAnimationFrame/setTimeout으로 미루면
+  // 한 프레임 동안 튄 화면이 그대로 보이므로 쓰지 않는다.
+  // 복원 대상(곡)이 사라졌으면 조용히 건너뛴다.
+  function restoreScrollState(saved) {
+    if (!saved) return;
+    document.querySelectorAll("#heatmaps .heatmap-wrap[data-song]").forEach((w) => {
+      const left = saved.wraps.get(w.dataset.song);
+      if (left != null) w.scrollLeft = left;
+    });
+    if (window.scrollX !== saved.x || window.scrollY !== saved.y) {
+      window.scrollTo(saved.x, saved.y);
+    }
+  }
+
+  // 헤더의 "저장 중 N건…" 표시. 항상 최신 pendingOps를 읽어서 갱신한다.
+  function updateSavingIndicator() {
+    const el = document.getElementById("saving-indicator");
+    if (!el) return;
+    if (pendingOps > 0) {
+      el.textContent = `저장 중 ${pendingOps}건…`;
+      el.classList.remove("hidden");
+    } else {
+      el.textContent = "";
+      el.classList.add("hidden");
+    }
+  }
+
+  // 화면을 그리는 길은 지금처럼 하나(renderHeatmaps 전체 재생성)만 유지한다.
+  // 여기서는 그 앞뒤로 스크롤 보존만 감싼다.
   function rerender() {
     if (!state.songsData) return;
+    const saved = captureScrollState();
     const blockedAt = computeBlockedAt(
       state.bookings,
       state.songsData,
@@ -1253,8 +1322,10 @@
       state.threshold,
       state.viewMode,
       state.bookings,
-      blockedAt
+      blockedAt,
+      state.pendingKeys
     );
+    restoreScrollState(saved);
   }
 
   function bindControls() {
@@ -1314,17 +1385,23 @@
     } else {
       state.bookings.set(key, state.bookingSeq++);
     }
+    // 서버 응답 전까지 이 key는 "미확정" — 반투명으로 그린다.
+    // 성공/실패 양쪽 모두에서 반드시 제거해야 칸이 영원히 반투명으로 남지 않는다.
+    state.pendingKeys.add(key);
+    pendingOps++;
+    updateSavingIndicator();
     rerender();
 
     // 2) POST를 직렬 큐에 추가. try/catch는 postBookingChange만 감싸서
     //    이후 sync/rerender의 예외가 catch로 떨어져 pendingOps가 중복 감소되는 것을 방지.
-    pendingOps++;
     opChain = opChain.then(async () => {
       let arr;
       try {
         arr = await postBookingChange(action, key);
       } catch (err) {
         pendingOps--;
+        state.pendingKeys.delete(key); // 실패 경로에서도 반드시 해제
+        updateSavingIndicator();
         // 이 작업만 롤백. 다른 진행 중 POST는 그대로 진행되며, 그 응답이 마지막일 때
         // 서버에서 sync되면서 최종 일관성이 회복된다(서버는 이 실패한 명령을 모르므로
         // 서버 상태가 곧 정답).
@@ -1349,10 +1426,17 @@
       // POST 성공: 모든 진행 중 POST가 끝났을 때만 서버 응답으로 sync.
       // 중간에 sync하면 다른 in-flight 작업의 optimistic 상태가 사라져 깜빡임 발생.
       pendingOps--;
-      if (pendingOps === 0) {
+      const pendingCleared = state.pendingKeys.delete(key);
+      updateSavingIndicator();
+      // 서버 key 집합이 현재 상태와 같으면 sync도 rerender도 하지 않는다(화면 튐 방지).
+      // 다르면 기존대로 sync + rerender.
+      let synced = false;
+      if (pendingOps === 0 && !bookingKeySetsEqual(arr, state.bookings)) {
         syncBookingsFromServer(arr);
-        rerender();
+        synced = true;
       }
+      // 미확정 표시가 풀렸으면 그것만으로도 다시 그려야 반투명이 걷힌다.
+      if (synced || pendingCleared) rerender();
     });
   }
 
@@ -1380,12 +1464,14 @@
     btn.textContent = "초기화 중...";
 
     pendingOps++;
+    updateSavingIndicator();
     opChain = opChain.then(async () => {
       let arr;
       try {
         arr = await postBookingChange("clear", null);
       } catch (err) {
         pendingOps--;
+        updateSavingIndicator();
         btn.disabled = false;
         btn.textContent = originalLabel;
         if (err && err.unauthorized) {
@@ -1396,10 +1482,12 @@
         return;
       }
       pendingOps--;
+      updateSavingIndicator();
       btn.disabled = false;
       btn.textContent = originalLabel;
       // 다른 in-flight op의 optimistic 상태를 덮어쓰지 않도록 큐가 비었을 때만 sync.
-      if (pendingOps === 0) {
+      // 서버 key 집합이 현재와 같으면(이미 비어 있었던 경우 등) 재생성하지 않는다.
+      if (pendingOps === 0 && !bookingKeySetsEqual(arr, state.bookings)) {
         syncBookingsFromServer(arr);
         rerender();
       }
@@ -1408,6 +1496,16 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     bindControls();
+    updateSavingIndicator();
+    // 저장 중(pendingOps > 0)일 때만 브라우저 기본 이탈 확인창.
+    // 리스너는 한 번만 등록하고 매번 최신 pendingOps를 읽는다 — 0이면 아무 것도 하지 않으므로
+    // 평소 새로고침은 번거로워지지 않는다.
+    window.addEventListener("beforeunload", (e) => {
+      if (pendingOps <= 0) return;
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    });
     restoreAdminSession(); // 저장된 토큰이 있으면 verify 후 관리자 모드 자동 복원 (비동기)
     if (APPS_SCRIPT_URL.includes("REPLACE_WITH_YOUR_DEPLOYMENT_ID")) {
       const errorBox = document.getElementById("error");

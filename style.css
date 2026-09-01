@@ -69,6 +69,17 @@ button { font-family: inherit; cursor: pointer; }
   color: rgba(255,255,255,0.7);
   font-size: 13px;
 }
+/* 저장 중 표시 — 헤더 레이아웃을 깨지 않도록 작은 pill 하나만 추가 */
+.saving-indicator {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.16);
+  border: 1px solid rgba(255,255,255,0.35);
+}
 
 .primary-btn {
   background: var(--primary);
@@ -396,6 +407,10 @@ table.heatmap s {
   white-space: normal;
   word-break: keep-all;
   font-style: italic;
+}
+/* 아직 서버 응답을 받지 못한 칸. hover에 의존하지 않는 표시(아이패드 대응). */
+table.heatmap td.cell-pending {
+  opacity: 0.55;
 }
 .cell-booked {
   box-shadow:
