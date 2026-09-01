@@ -19,7 +19,7 @@
   "use strict";
 
   // 캐시/배포 버전 확인용 — 콘솔에 찍힙니다. 새 배포가 안 보이면 이 값을 비교하세요.
-  const APP_VERSION = "2026-07-11-r15";
+  const APP_VERSION = "2026-07-11-r16";
   console.log("[app] 댄스 연습 일정 분석 버전:", APP_VERSION);
 
   /* =======================================================================
@@ -1290,16 +1290,18 @@
     }
   }
 
-  // 헤더의 "저장 중 N건…" 표시. 항상 최신 pendingOps를 읽어서 갱신한다.
+  // 헤더의 "저장 중 N건" 표시. 항상 최신 pendingOps를 읽어서 갱신한다.
+  // 요소를 DOM에서 빼거나 display:none으로 감추면 헤더 높이가 바뀌면서 아래 표가
+  // 통째로 밀리므로, 자리는 그대로 두고 .is-idle(visibility:hidden)로만 감춘다.
   function updateSavingIndicator() {
     const el = document.getElementById("saving-indicator");
     if (!el) return;
     if (pendingOps > 0) {
-      el.textContent = `저장 중 ${pendingOps}건…`;
-      el.classList.remove("hidden");
+      el.textContent = `저장 중 ${pendingOps}건`;
+      el.classList.remove("is-idle");
     } else {
       el.textContent = "";
-      el.classList.add("hidden");
+      el.classList.add("is-idle");
     }
   }
 
